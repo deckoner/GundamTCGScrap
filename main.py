@@ -3,14 +3,31 @@ import re
 import time
 from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from rich.console import Console
+from rich.progress import Progress
+
+console = Console()
 
 START_URL = "https://www.gundam-gcg.com/en/cards/"
 OUTPUT_CSV = "gundam_cards.csv"
 HEADLESS = True
 
 FIELDNAMES = [
-    "GD", "name", "rarity", "level", "cost", "color", "type",
-    "text_card", "zone", "link", "ap", "hp", "anime", "belongs_gd", "img"
+    "GD",
+    "name",
+    "rarity",
+    "level",
+    "cost",
+    "color",
+    "type",
+    "text_card",
+    "zone",
+    "link",
+    "ap",
+    "hp",
+    "anime",
+    "belongs_gd",
+    "img",
 ]
 
 
@@ -52,10 +69,9 @@ def _extract_from_frame(frame, base_url):
     name = safe_text(".cardName") or safe_text(".nameCol h1.cardName")
 
     txt_el = frame.query_selector("div.cardDataRow.overview .dataTxt")
-    if txt_el:
-        text_card = re.sub(r'[.,\"\t\n\r\']', '', txt_el.inner_text().strip())
-    else:
-        text_card = None
+    text_card = (
+        re.sub(r"[.,\"\t\n\r\']", "", txt_el.inner_text().strip()) if txt_el else None
+    )
 
     level = _find_dd_by_dt(frame, "Lv.")
     cost = _find_dd_by_dt(frame, "COST")
@@ -68,7 +84,9 @@ def _extract_from_frame(frame, base_url):
     anime = _find_dd_by_dt(frame, "Source Title")
     belongs_gd = _find_dd_by_dt(frame, "Where to get it")
 
-    img_el = frame.query_selector("img[src*='/images/cards/card/'], img.cardImg, .cardImg img")
+    img_el = frame.query_selector(
+        "img[src*='/images/cards/card/'], img.cardImg, .cardImg img"
+    )
     img_url = ""
     if img_el:
         src = img_el.get_attribute("src") or img_el.get_attribute("data-src") or ""
@@ -90,7 +108,7 @@ def _extract_from_frame(frame, base_url):
         "hp": hp,
         "anime": anime,
         "belongs_gd": belongs_gd,
-        "img": img_url
+        "img": img_url,
     }
 
 
@@ -101,33 +119,36 @@ def _reject_cookies(page):
         reject_btn.scroll_into_view_if_needed()
         reject_btn.click(force=True)
         page.wait_for_timeout(1000)
-        print("✅ Cookies rechazadas correctamente.")
+        console.print("[green]✅ Cookies rejected successfully.[/green]")
     except Exception as e:
-        print("⚠️ No se pudo rechazar cookies:", e)
+        console.print(f"[yellow]⚠️ Could not reject cookies: {e}[/yellow]")
 
 
 def _open_dropdown(page):
     try:
-        toggle = page.locator('.toggleBtn.js-toggle[data-toggleelem="js-toggle--01"]').first
+        toggle = page.locator(
+            '.toggleBtn.js-toggle[data-toggleelem="js-toggle--01"]'
+        ).first
         toggle.scroll_into_view_if_needed()
         toggle.click(force=True)
         page.wait_for_timeout(3000)
         html_after_click = page.content()
         if "filterListItems" not in html_after_click:
             page.evaluate(
-                'document.querySelector(".toggleBtn.js-toggle[data-toggleelem=\'js-toggle--01\']").click()'
+                "document.querySelector(\".toggleBtn.js-toggle[data-toggleelem='js-toggle--01']\").click()"
             )
             page.wait_for_timeout(3000)
         page.wait_for_selector(".filterListItems", timeout=5000)
-        print("✅ Dropdown abierto correctamente.")
+        console.print("[green]✅ Expansion dropdown opened successfully.[/green]")
     except Exception as e:
-        print("❌ No se pudo abrir el menú de expansiones:", e)
+        console.print(f"[red]❌ Could not open expansion dropdown: {e}[/red]")
 
 
 def _select_all_option(page):
     try:
         page.wait_for_selector(".filterListItems", timeout=5000)
-        page.evaluate("""
+        page.evaluate(
+            """
             const links = document.querySelectorAll('a.js-selectBtn-package');
             for (const link of links) {
                 if (link.textContent.trim().toUpperCase() === 'ALL') {
@@ -136,11 +157,12 @@ def _select_all_option(page):
                     break;
                 }
             }
-        """)
+        """
+        )
         page.wait_for_selector("li.cardItem a.cardStr[data-fancybox]", timeout=15000)
-        print("✅ 'ALL' seleccionado correctamente.")
+        console.print("[green]✅ 'ALL' selected successfully.[/green]")
     except Exception as e:
-        print("❌ Error al seleccionar 'ALL':", e)
+        console.print(f"[red]❌ Error selecting 'ALL': {e}[/red]")
 
 
 def _click_first_card(page):
@@ -151,8 +173,13 @@ def _click_first_card(page):
 def _extract_first_card(page, base_url):
     frame = _get_detail_frame(page, timeout=10000)
     first_data = _extract_from_frame(frame, base_url)
-    key = (first_data["GD"], first_data["name"], first_data["rarity"], first_data["belongs_gd"])
-    print("Primera carta encontrada:", key)
+    key = (
+        first_data["GD"],
+        first_data["name"],
+        first_data["rarity"],
+        first_data["belongs_gd"],
+    )
+    console.print(f"[cyan]First card found: {key}[/cyan]")
     return first_data, key
 
 
@@ -171,7 +198,7 @@ def _wait_for_new_card(page, prev_key, timeout=15):
                 gd.inner_text().strip(),
                 name.inner_text().strip(),
                 rarity.inner_text().strip(),
-                belongs.inner_text().strip() if belongs else ""
+                belongs.inner_text().strip() if belongs else "",
             )
             if key != prev_key:
                 return True
@@ -184,34 +211,35 @@ def _wait_for_new_card(page, prev_key, timeout=15):
 def _iterate_cards(page, base_url, first_key, first_data):
     records = [first_data]
     prev_key = first_key
+
     while True:
         try:
             next_btn = page.locator('button.fancybox-button[title="Next"]').first
             next_btn.scroll_into_view_if_needed()
             next_btn.click()
         except Exception as e:
-            print("No pude pulsar Next:", e)
+            console.print(f"[red]Could not click Next button: {e}[/red]")
             break
 
         if not _wait_for_new_card(page, prev_key, timeout=15):
-            print("Timeout esperando nueva carta.")
+            console.print("[yellow]Timeout waiting for a new card.[/yellow]")
             break
 
         try:
             frame = _get_detail_frame(page, timeout=10000)
             cur = _extract_from_frame(frame, base_url)
         except Exception as e:
-            print("Error extrayendo datos:", e)
+            console.print(f"[yellow]Error extracting data: {e}[/yellow]")
             continue
 
         cur_key = (cur["GD"], cur["name"], cur["rarity"], cur["belongs_gd"])
         if cur_key == first_key:
-            print("Fin del scraping.")
+            console.print("[green]Reached first card again. Scraping finished.[/green]")
             break
 
         records.append(cur)
         prev_key = cur_key
-        print(f"Carta #{len(records)}: {cur_key}")
+        console.print(f"[green]Scraping card #{len(records)}: {cur_key}[/green]")
 
     return records
 
@@ -221,8 +249,12 @@ def _save_to_csv(records):
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
         for r in records:
-            writer.writerow({k: r.get(k, "") if r.get(k, "") is not None else "" for k in FIELDNAMES})
-    print(f"✅ {len(records)} registros guardados en {OUTPUT_CSV}.")
+            row = {}
+            for field in FIELDNAMES:
+                value = r.get(field)
+                row[field] = value if value not in (None, "") else "NULL"
+            writer.writerow(row)
+    console.print(f"[green]✅ {len(records)} records saved to {OUTPUT_CSV}[/green]")
 
 
 def main():
