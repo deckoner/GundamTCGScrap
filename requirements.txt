@@ -1,2 +1,4 @@
 playwright
 rich
+pandas
+MariaDB
