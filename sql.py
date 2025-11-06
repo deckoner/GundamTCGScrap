@@ -74,18 +74,18 @@ def connect_sqlite(db):
 
 def connect_mariadb(db):
     """
-    Crea y retorna una conexión a MariaDB usando variables del archivo .env.
-    Requiere pymysql y python-dotenv instalados.
+    Creates and returns a connection to MariaDB using environment variables.
+    Requires pymysql and python-dotenv installed.
     """
-    load_dotenv()  # Carga las variables del archivo .env
+    load_dotenv()
 
     host = os.getenv("DB_HOST", "localhost")
     user = os.getenv("DB_USER", "root")
     password = os.getenv("DB_PASSWORD", "")
 
     if not db:
-        console.print("[red]ERROR: Falta DB_NAME en el archivo .env[/red]")
-        raise RuntimeError("DB_NAME no está definido en .env")
+        console.print("[red]ERROR: Missing DB_NAME in .env file[/red]")
+        raise RuntimeError("DB_NAME not defined in .env")
 
     try:
         connection = pymysql.connect(
@@ -96,19 +96,19 @@ def connect_mariadb(db):
             autocommit=True,
             charset="utf8mb4",
         )
-        console.print("[green]Conexión a MariaDB establecida correctamente[/green]")
+        console.print("[green]MariaDB connection established successfully[/green]")
         return connection
 
     except pymysql.MySQLError as e:
-        console.print(f"[red]Error al conectar a MariaDB:[/red] {e}")
+        console.print(f"[red]Error connecting to MariaDB:[/red] {e}")
         raise
 
 
 def create_schema(conn, maria=False):
     """
-    Creates all database tables required for the card system.
+    Creates all database tables required for the card system and user management.
     Supports both SQLite and MariaDB schema definitions.
-    Uses bridge tables for many-to-many relationships.
+    Includes users, user collections, and decks (with ownership and cards).
     """
     cur = conn.cursor()
 
@@ -117,6 +117,7 @@ def create_schema(conn, maria=False):
             """
         PRAGMA foreign_keys = ON;
 
+        -- Base card data
         CREATE TABLE IF NOT EXISTS cards (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             gd TEXT,
@@ -149,6 +150,38 @@ def create_schema(conn, maria=False):
         CREATE TABLE IF NOT EXISTS card_colors(card_id INT, color_id INT, PRIMARY KEY(card_id,color_id));
         CREATE TABLE IF NOT EXISTS card_types(card_id INT, type_id INT, PRIMARY KEY(card_id,type_id));
         CREATE TABLE IF NOT EXISTS card_tags(card_id INT, tag_id INT, PRIMARY KEY(card_id,tag_id));
+
+        -- User and deck system
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS user_collections (
+            user_id INT,
+            card_id INT,
+            quantity INT DEFAULT 1,
+            PRIMARY KEY(user_id, card_id),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS decks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            user_id INT,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS deck_cards (
+            deck_id INT,
+            card_id INT,
+            quantity INT DEFAULT 1,
+            PRIMARY KEY(deck_id, card_id),
+            FOREIGN KEY(deck_id) REFERENCES decks(id) ON DELETE CASCADE,
+            FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE
+        );
         """
         )
     else:
@@ -177,6 +210,7 @@ def create_schema(conn, maria=False):
         """
         )
 
+        # Lookup tables
         for tbl, col in [
             ("colors", "color"),
             ("types", "type"),
@@ -190,6 +224,7 @@ def create_schema(conn, maria=False):
                 f"CREATE TABLE IF NOT EXISTS {tbl}(id INT AUTO_INCREMENT PRIMARY KEY,{col} VARCHAR(255) UNIQUE) ENGINE=InnoDB;"
             )
 
+        # Relationship tables
         for tbl, a, b in [
             ("card_colors", "card_id", "color_id"),
             ("card_types", "card_id", "type_id"),
@@ -198,6 +233,54 @@ def create_schema(conn, maria=False):
             cur.execute(
                 f"CREATE TABLE IF NOT EXISTS {tbl}({a} INT, {b} INT, PRIMARY KEY({a},{b})) ENGINE=InnoDB;"
             )
+
+        # User and deck tables
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS users (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(100) UNIQUE NOT NULL,
+            password_hash TEXT
+        ) ENGINE=InnoDB;
+        """
+        )
+
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS user_collections (
+            user_id INT,
+            card_id INT,
+            quantity INT DEFAULT 1,
+            PRIMARY KEY(user_id, card_id),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB;
+        """
+        )
+
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS decks (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            user_id INT,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB;
+        """
+        )
+
+        cur.execute(
+            """
+        CREATE TABLE IF NOT EXISTS deck_cards (
+            deck_id INT,
+            card_id INT,
+            quantity INT DEFAULT 1,
+            PRIMARY KEY(deck_id, card_id),
+            FOREIGN KEY(deck_id) REFERENCES decks(id) ON DELETE CASCADE,
+            FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB;
+        """
+        )
 
 
 def get_or_create(conn, table, col, value, maria=False):

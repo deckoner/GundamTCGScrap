@@ -2,3 +2,4 @@ playwright
 rich
 pandas
 MariaDB
+dotenv
