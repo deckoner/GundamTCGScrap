@@ -1,0 +1,206 @@
+===============================================================
+DATABASE STRUCTURE DOCUMENTATION
+Card Management & User System
+===============================================================
+
+---------------------------------------------------------------
+1. MAIN ENTITY TABLES
+---------------------------------------------------------------
+
+TABLE: cards
+---------------------------------------------------------------
+Purpose:
+Stores all card-related data imported from the CSV file.
+
+Columns:
+- id (INTEGER, PK, AUTOINCREMENT)
+- gd (TEXT): Card group or set identifier.
+- name (TEXT): Card name.
+- rarity (TEXT): Rarity type.
+- level (INT): Card level value.
+- cost (INT): Card cost.
+- text_card (TEXT): Description or card effect.
+- zone_id (INT, FK → zones.id): Associated zone.
+- link_id (INT, FK → links.id): Linked category.
+- anime_id (INT, FK → animes.id): Related anime.
+- belongs_gd_id (INT, FK → belongs_gd.id): Related group.
+- ap (TEXT): Attack points or equivalent.
+- hp (TEXT): Health points or equivalent.
+- img (TEXT): Path or URL to the card image.
+- alt_art (BOOLEAN): Indicates if the card is an alternate art.
+- color_ids (TEXT): Cached list of associated color IDs.
+- type_ids (TEXT): Cached list of associated type IDs.
+- tag_ids (TEXT): Cached list of associated tag IDs.
+
+Relationships:
+- Many-to-many with colors (via card_colors)
+- Many-to-many with types (via card_types)
+- Many-to-many with tags (via card_tags)
+
+
+---------------------------------------------------------------
+2. LOOKUP / DIMENSION TABLES
+---------------------------------------------------------------
+
+TABLE: colors
+- id (INTEGER, PK, AUTOINCREMENT)
+- color (TEXT, UNIQUE)
+
+TABLE: types
+- id (INTEGER, PK, AUTOINCREMENT)
+- type (TEXT, UNIQUE)
+
+TABLE: tags
+- id (INTEGER, PK, AUTOINCREMENT)
+- tag (TEXT, UNIQUE)
+
+TABLE: zones
+- id (INTEGER, PK, AUTOINCREMENT)
+- zone (TEXT, UNIQUE)
+
+TABLE: links
+- id (INTEGER, PK, AUTOINCREMENT)
+- link (TEXT, UNIQUE)
+
+TABLE: animes
+- id (INTEGER, PK, AUTOINCREMENT)
+- anime (TEXT, UNIQUE)
+
+TABLE: belongs_gd
+- id (INTEGER, PK, AUTOINCREMENT)
+- belongs_gd (TEXT, UNIQUE)
+
+
+---------------------------------------------------------------
+3. RELATIONSHIP TABLES (CARD CONNECTIONS)
+---------------------------------------------------------------
+
+TABLE: card_colors
+Purpose: Many-to-many relation between cards and colors.
+- card_id (INT, FK → cards.id)
+- color_id (INT, FK → colors.id)
+PRIMARY KEY (card_id, color_id)
+
+TABLE: card_types
+Purpose: Many-to-many relation between cards and types.
+- card_id (INT, FK → cards.id)
+- type_id (INT, FK → types.id)
+PRIMARY KEY (card_id, type_id)
+
+TABLE: card_tags
+Purpose: Many-to-many relation between cards and tags.
+- card_id (INT, FK → cards.id)
+- tag_id (INT, FK → tags.id)
+PRIMARY KEY (card_id, tag_id)
+
+
+---------------------------------------------------------------
+4. USER MANAGEMENT SYSTEM
+---------------------------------------------------------------
+
+TABLE: users
+---------------------------------------------------------------
+Purpose:
+Stores registered user accounts.
+
+Columns:
+- id (INTEGER, PK, AUTOINCREMENT)
+- username (TEXT, UNIQUE, NOT NULL)
+- email (TEXT, UNIQUE)
+- password_hash (TEXT): Hashed password for authentication.
+
+Relationships:
+- One-to-many with decks (users → decks)
+- Many-to-many with cards via user_collections
+
+
+---------------------------------------------------------------
+5. COLLECTION SYSTEM
+---------------------------------------------------------------
+
+TABLE: user_collections
+---------------------------------------------------------------
+Purpose:
+Represents each user’s card collection. Each row defines
+how many copies of a card a user owns.
+
+Columns:
+- user_id (INT, FK → users.id)
+- card_id (INT, FK → cards.id)
+- quantity (INT, DEFAULT 1)
+
+PRIMARY KEY (user_id, card_id)
+
+Relationships:
+- Belongs to a single user.
+- Refers to a single card.
+- Uses ON DELETE CASCADE for referential cleanup.
+
+
+---------------------------------------------------------------
+6. DECK MANAGEMENT SYSTEM
+---------------------------------------------------------------
+
+TABLE: decks
+---------------------------------------------------------------
+Purpose:
+Represents decks created by users.
+
+Columns:
+- id (INTEGER, PK, AUTOINCREMENT)
+- name (TEXT, NOT NULL): Deck name chosen by the user.
+- user_id (INT, FK → users.id): Deck owner.
+
+Relationships:
+- Belongs to one user (deck owner).
+- Many-to-many with cards via deck_cards.
+
+
+TABLE: deck_cards
+---------------------------------------------------------------
+Purpose:
+Defines the card composition of each deck, including the
+number of copies of each card in that deck.
+
+Columns:
+- deck_id (INT, FK → decks.id)
+- card_id (INT, FK → cards.id)
+- quantity (INT, DEFAULT 1)
+
+PRIMARY KEY (deck_id, card_id)
+
+Relationships:
+- Belongs to one deck.
+- References one card.
+- ON DELETE CASCADE ensures deck cleanup when owner or deck is removed.
+
+
+---------------------------------------------------------------
+7. RELATIONSHIP OVERVIEW (ER MODEL SUMMARY)
+---------------------------------------------------------------
+
+users (1) ────< user_collections >──── (∞) cards
+users (1) ────< decks
+decks (1) ────< deck_cards >──── (∞) cards
+cards (∞) ────< card_colors >──── (∞) colors
+cards (∞) ────< card_types >──── (∞) types
+cards (∞) ────< card_tags >──── (∞) tags
+cards (∞) ────> zones / links / animes / belongs_gd (1)
+
+All foreign keys use ON DELETE CASCADE for automatic cleanup.
+
+
+---------------------------------------------------------------
+8. ADDITIONAL NOTES
+---------------------------------------------------------------
+- The schema is compatible with both SQLite and MariaDB.
+- Primary keys are AUTOINCREMENT (SQLite) or AUTO_INCREMENT (MariaDB).
+- All many-to-many relationships use composite primary keys.
+- The "quantity" fields allow tracking card duplicates in collections and decks.
+- All text fields are stored in UTF-8 encoding.
+- Foreign key constraints are enforced when PRAGMA foreign_keys = ON (SQLite).
+- Users and decks can be extended easily for multiplayer or online sync features.
+
+===============================================================
+END OF DOCUMENT
+===============================================================
