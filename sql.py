@@ -1,6 +1,8 @@
+import os
 import re
 import sqlite3
 import pandas as pd
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.progress import track
 
@@ -70,23 +72,36 @@ def connect_sqlite(db):
     return sqlite3.connect(db)
 
 
-def connect_mariadb(db, host="localhost", user="root", password=""):
+def connect_mariadb(db):
     """
-    Creates and returns a MariaDB connection.
-    Requires pymysql to be installed, otherwise raises an error.
+    Crea y retorna una conexión a MariaDB usando variables del archivo .env.
+    Requiere pymysql y python-dotenv instalados.
     """
-    if not pymysql:
-        console.print("[red]ERROR: pymysql is not installed[/red]")
-        raise RuntimeError("pymysql is required for MariaDB")
+    load_dotenv()  # Carga las variables del archivo .env
 
-    return pymysql.connect(
-        host=host,
-        user=user,
-        password=password,
-        database=db,
-        autocommit=True,
-        charset="utf8mb4",
-    )
+    host = os.getenv("DB_HOST", "localhost")
+    user = os.getenv("DB_USER", "root")
+    password = os.getenv("DB_PASSWORD", "")
+
+    if not db:
+        console.print("[red]ERROR: Falta DB_NAME en el archivo .env[/red]")
+        raise RuntimeError("DB_NAME no está definido en .env")
+
+    try:
+        connection = pymysql.connect(
+            host=host,
+            user=user,
+            password=password,
+            database=db,
+            autocommit=True,
+            charset="utf8mb4",
+        )
+        console.print("[green]Conexión a MariaDB establecida correctamente[/green]")
+        return connection
+
+    except pymysql.MySQLError as e:
+        console.print(f"[red]Error al conectar a MariaDB:[/red] {e}")
+        raise
 
 
 def create_schema(conn, maria=False):

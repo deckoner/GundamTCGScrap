@@ -1,2 +1,4 @@
 .venv
+.env
 gundam_cards.csv
+__pycache__

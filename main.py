@@ -7,8 +7,8 @@ console = Console()
 
 def main():
     csv_name = "gundam_cards.csv"
-    use_sqlite = True
-    db_name = "gundam_cards.db"
+    use_sqlite = False
+    db_name = "GundamDB"
 
     console.print("[cyan]Starting scraper...[/cyan]")
     # run_scraper(csv_name)
