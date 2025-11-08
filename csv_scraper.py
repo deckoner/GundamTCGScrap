@@ -1,15 +1,20 @@
 import csv
 import re
 import time
+import os
 from urllib.parse import urljoin
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright
 from rich.console import Console
 
 console = Console()
 
 START_URL = "https://www.gundam-gcg.com/en/cards/"
 OUTPUT_CSV = "gundam_cards.csv"
-HEADLESS = True
+HEADLESS = False
+WAIT_BETWEEN_PACKAGES = 30
+MAX_RETRIES_PER_PACKAGE = 3
+PAUSE_EVERY_CARDS = 50
+PAUSE_TIME = 30
 
 FIELDNAMES = [
     "GD",
@@ -21,6 +26,7 @@ FIELDNAMES = [
     "type",
     "text_card",
     "zone",
+    "trait",
     "link",
     "ap",
     "hp",
@@ -66,17 +72,23 @@ def _extract_from_frame(frame, base_url):
     gd = safe_text(".cardNo") or safe_text("div.cardNo")
     rarity = safe_text(".rarity")
     name = safe_text(".cardName") or safe_text(".nameCol h1.cardName")
-
     txt_el = frame.query_selector("div.cardDataRow.overview .dataTxt")
     text_card = (
-        re.sub(r"[.,\"\t\n\r\']", "", txt_el.inner_text().strip()) if txt_el else None
+        re.sub(r"[.,\"\t\n\r']", "", txt_el.inner_text().strip()) if txt_el else None
     )
-
     level = _find_dd_by_dt(frame, "Lv.")
     cost = _find_dd_by_dt(frame, "COST")
     color = _find_dd_by_dt(frame, "COLOR")
     type_ = _find_dd_by_dt(frame, "TYPE")
     zone = _find_dd_by_dt(frame, "Zone")
+
+    trait_text = _find_dd_by_dt(frame, "Trait")
+    traits = None
+    if trait_text:
+        matches = re.findall(r"\((.*?)\)", trait_text)
+        if matches:
+            traits = " y ".join(matches)
+
     link = _find_dd_by_dt(frame, "Link")
     ap = _find_dd_by_dt(frame, "AP")
     hp = _find_dd_by_dt(frame, "HP")
@@ -102,6 +114,7 @@ def _extract_from_frame(frame, base_url):
         "type": type_,
         "text_card": text_card,
         "zone": zone,
+        "trait": traits,
         "link": link,
         "ap": ap,
         "hp": hp,
@@ -130,43 +143,65 @@ def _open_dropdown(page):
         ).first
         toggle.scroll_into_view_if_needed()
         toggle.click(force=True)
-        page.wait_for_timeout(3000)
-        html_after_click = page.content()
-        if "filterListItems" not in html_after_click:
-            page.evaluate(
-                "document.querySelector(\".toggleBtn.js-toggle[data-toggleelem='js-toggle--01']\").click()"
-            )
-            page.wait_for_timeout(3000)
-        page.wait_for_selector(".filterListItems", timeout=5000)
+        page.wait_for_timeout(1000)
+        if not page.locator(".filterListItems").count():
+            page.wait_for_selector(".filterListItems", timeout=5000)
         console.print("[green]✅ Expansion dropdown opened successfully.[/green]")
     except Exception as e:
-        console.print(f"[red]❌ Could not open expansion dropdown: {e}[/red]")
+        console.print(f"[yellow]⚠️ Could not open expansion dropdown, ignoring: {e}[/yellow]")
 
 
-def _select_all_option(page):
-    try:
-        page.wait_for_selector(".filterListItems", timeout=5000)
+def _get_packages(page):
+    pkgs = page.evaluate(
+        """() => {
+            return Array.from(document.querySelectorAll('a.js-selectBtn-package')).map(a => ({
+                text: a.textContent.trim(),
+                val: a.getAttribute('data-val') || '',
+                isCurrent: a.classList.contains('is-current')
+            }));
+        }"""
+    )
+    return pkgs
+
+
+def _select_package(page, data_val, visible_text=None):
+    if data_val:
         page.evaluate(
-            """
-            const links = document.querySelectorAll('a.js-selectBtn-package');
-            for (const link of links) {
-                if (link.textContent.trim().toUpperCase() === 'ALL') {
-                    link.scrollIntoView({behavior: 'instant', block: 'center'});
-                    link.click();
-                    break;
-                }
-            }
-        """
+            """(val) => {
+                const a = Array.from(document.querySelectorAll('a.js-selectBtn-package')).find(x => (x.getAttribute('data-val') || '') === val);
+                if (a) a.click();
+            }""",
+            data_val,
         )
-        page.wait_for_selector("li.cardItem a.cardStr[data-fancybox]", timeout=15000)
-        console.print("[green]✅ 'ALL' selected successfully.[/green]")
-    except Exception as e:
-        console.print(f"[red]❌ Error selecting 'ALL': {e}[/red]")
+    elif visible_text:
+        page.evaluate(
+            """(txt) => {
+                const a = Array.from(document.querySelectorAll('a.js-selectBtn-package')).find(x => x.textContent.trim() === txt);
+                if (a) a.click();
+            }""",
+            visible_text,
+        )
+    page.wait_for_timeout(800)
 
 
 def _click_first_card(page):
+    page.wait_for_selector("li.cardItem a.cardStr[data-fancybox]", timeout=15000)
     first_card_anchor = page.locator("li.cardItem a.cardStr").first
     first_card_anchor.click()
+
+
+def _close_fancybox_if_open(page):
+    try:
+        close_btn = page.locator('button.fancybox-button[title="Close"]').first
+        if close_btn and close_btn.is_visible():
+            close_btn.click()
+            page.wait_for_timeout(500)
+    except Exception:
+        try:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+        except Exception:
+            pass
 
 
 def _extract_first_card(page, base_url):
@@ -210,10 +245,18 @@ def _wait_for_new_card(page, prev_key, timeout=15):
 def _iterate_cards(page, base_url, first_key, first_data):
     records = [first_data]
     prev_key = first_key
-
+    count_since_pause = 1
     while True:
         try:
             next_btn = page.locator('button.fancybox-button[title="Next"]').first
+            if not next_btn:
+                break
+            disabled_attr = next_btn.get_attribute("disabled")
+            cls = next_btn.get_attribute("class") or ""
+            if disabled_attr is not None or "disabled" in (cls or ""):
+                break
+            if not next_btn.is_visible() or not next_btn.is_enabled():
+                break
             next_btn.scroll_into_view_if_needed()
             next_btn.click()
         except Exception as e:
@@ -223,24 +266,36 @@ def _iterate_cards(page, base_url, first_key, first_data):
         if not _wait_for_new_card(page, prev_key, timeout=15):
             console.print("[yellow]Timeout waiting for a new card.[/yellow]")
             break
-
         try:
             frame = _get_detail_frame(page, timeout=10000)
             cur = _extract_from_frame(frame, base_url)
         except Exception as e:
             console.print(f"[yellow]Error extracting data: {e}[/yellow]")
             continue
-
         cur_key = (cur["GD"], cur["name"], cur["rarity"], cur["belongs_gd"])
         if cur_key == first_key:
             console.print("[green]Reached first card again. Scraping finished.[/green]")
             break
-
         records.append(cur)
         prev_key = cur_key
         console.print(f"[green]Scraping card #{len(records)}: {cur_key}[/green]")
 
+        count_since_pause += 1
+        if count_since_pause >= PAUSE_EVERY_CARDS:
+            console.print(f"[cyan]Pausing {PAUSE_TIME}s to avoid overload...[/cyan]")
+            time.sleep(PAUSE_TIME)
+            count_since_pause = 0
+
+    _close_fancybox_if_open(page)
     return records
+
+
+def _load_existing_csv():
+    if not os.path.exists(OUTPUT_CSV):
+        return []
+    with open(OUTPUT_CSV, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        return list(reader)
 
 
 def _save_to_csv(records):
@@ -248,34 +303,84 @@ def _save_to_csv(records):
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
         for r in records:
-            row = {}
-            for field in FIELDNAMES:
-                value = r.get(field)
-                row[field] = value if value not in (None, "") else "NULL"
+            row = {field: (r.get(field) if r.get(field) not in (None, "") else "NULL") for field in FIELDNAMES}
             writer.writerow(row)
     console.print(f"[green]✅ {len(records)} records saved to {OUTPUT_CSV}[/green]")
-
-
-def main():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS)
-        page = browser.new_page()
-        page.goto(START_URL, wait_until="domcontentloaded")
-
-        _reject_cookies(page)
-        _open_dropdown(page)
-        _select_all_option(page)
-        _click_first_card(page)
-
-        base_url = page.url.rsplit("/", 1)[0] + "/"
-        first_data, first_key = _extract_first_card(page, base_url)
-        records = _iterate_cards(page, base_url, first_key, first_data)
-        _save_to_csv(records)
-
-        browser.close()
 
 
 def run_scraper(output_csv):
     global OUTPUT_CSV
     OUTPUT_CSV = output_csv
-    main()
+    existing_records = _load_existing_csv()
+    existing_packages = set(r["belongs_gd"] for r in existing_records if r.get("belongs_gd"))
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=HEADLESS, args=["--start-maximized"])
+        page = browser.new_page(viewport={"width": 1920, "height": 1080})
+        page.goto(START_URL, wait_until="domcontentloaded")
+        _reject_cookies(page)
+
+        _open_dropdown(page)
+        packages = _get_packages(page)
+        if not packages:
+            console.print("[red]No packages found, exiting.[/red]")
+            browser.close()
+            return
+
+        all_records = existing_records
+        base_url = page.url.rsplit("/", 1)[0] + "/"
+
+        for pkg in packages:
+            pkg_text = pkg["text"]
+            pkg_val = pkg["val"]
+            if pkg_text.strip().upper() == "ALL" or pkg_text in existing_packages:
+                console.print(f"[yellow]Package '{pkg_text}' already exists or skipped.[/yellow]")
+                continue
+
+            console.print(f"[magenta]Processing package: {pkg_text} (val={pkg_val})[/magenta]")
+            succeeded = False
+            attempts = 0
+
+            while not succeeded and attempts < MAX_RETRIES_PER_PACKAGE:
+                attempts += 1
+                temp_records = []
+                try:
+                    _open_dropdown(page)
+                    _select_package(page, pkg_val, pkg_text)
+                    try:
+                        page.wait_for_selector("li.cardItem a.cardStr[data-fancybox]", timeout=15000)
+                    except Exception:
+                        console.print(f"[yellow]No cards found for package '{pkg_text}', skipping.[/yellow]")
+                        succeeded = True
+                        break
+
+                    _click_first_card(page)
+                    first_data, first_key = _extract_first_card(page, base_url)
+                    temp_records = _iterate_cards(page, base_url, first_key, first_data)
+
+                    for r in temp_records:
+                        if not r.get("belongs_gd"):
+                            r["belongs_gd"] = pkg_text
+
+                    all_records = [r for r in all_records if r.get("belongs_gd") != pkg_text]
+                    all_records.extend(temp_records)
+                    _save_to_csv(all_records)
+
+                    console.print(f"[green]Package '{pkg_text}' scraped successfully: {len(temp_records)} cards.[/green]")
+                    succeeded = True
+
+                    console.print(f"[cyan]Waiting {WAIT_BETWEEN_PACKAGES}s before next package...[/cyan]")
+                    time.sleep(WAIT_BETWEEN_PACKAGES)
+                except Exception as e:
+                    console.print(f"[red]Error scraping package '{pkg_text}' (attempt {attempts}): {e}[/red]")
+                    _close_fancybox_if_open(page)
+                    all_records = [r for r in all_records if r.get("belongs_gd") != pkg_text]
+                    _save_to_csv(all_records)
+                    console.print(f"[yellow]Retrying package '{pkg_text}' after {WAIT_BETWEEN_PACKAGES}s...[/yellow]")
+                    time.sleep(WAIT_BETWEEN_PACKAGES)
+
+            if not succeeded:
+                console.print(f"[red]Failed package '{pkg_text}' after {MAX_RETRIES_PER_PACKAGE} attempts, skipping.[/red]")
+
+        _save_to_csv(all_records)
+        browser.close()
