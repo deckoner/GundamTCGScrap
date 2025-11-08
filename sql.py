@@ -19,11 +19,55 @@ def split_multi_values(s):
         return []
     if isinstance(s, (int, float)):
         s = str(s)
-    parts = re.split(r"[\/;,|]+|\s{2,}|(?<=\w)\s(?=\w)|,", s)
+    # sólo dividir por delimitadores claros: coma, /, ;, |, " y " (español) o dos o más espacios
+    s = s.strip()
+    parts = re.split(r"[\/;,|]+|\s{2,}|\s+y\s+", s)
     cleaned = [
         p.strip() for p in parts if p.strip() and p not in ("-", "NULL", "null", "None")
     ]
     return list(dict.fromkeys(cleaned))
+
+
+def split_traits(s):
+    """Parsea la columna 'trait' conservando nombres compuestos como
+    'Earth Federation' o 'White Base Team' y manejando formatos como:
+    - 'Earth Federation y White Base Team'
+    - '(White Base Team) Trait'
+    - 'NULL' / 'None' / '-'
+    Devuelve una lista única preservando el orden.
+    """
+    if pd.isna(s) or str(s).strip() == "":
+        return []
+    raw = str(s).strip()
+
+    if raw.upper() in ("NULL", "NONE", "-"):
+        return []
+
+    # Extraer tokens entre paréntesis primero (suelen indicar traits exactos)
+    paren = re.findall(r"\(([^)]+)\)", raw)
+    # Remover los paréntesis del texto para no volver a procesarlos
+    text_no_paren = re.sub(r"\([^)]+\)", " ", raw)
+
+    # Unificar delimitadores comunes (coma, /, ;, |, ' y ' en español)
+    normalized = re.sub(r"[\/;|\u3001]", "|||", text_no_paren)  # \u3001 (ideographic comma) por si aparece
+    normalized = re.sub(r"\s+y\s+", "|||", normalized, flags=re.IGNORECASE)
+    # también dividir en varias espacios (dos o más)
+    normalized = re.sub(r"\s{2,}", "|||", normalized)
+
+    parts = [p.strip() for p in normalized.split("|||") if p.strip()]
+
+    combined = paren + parts
+
+    clean = []
+    for p in combined:
+        # quitar la palabra 'Trait' si aparece y otros residuos
+        p2 = re.sub(r"\bTrait\b", "", p, flags=re.IGNORECASE).strip()
+        # quitar corchetes u otros caracteres sobrantes
+        p2 = p2.strip("[] ,;:（）()")
+        if p2 and p2.upper() not in ("NULL", "NONE", "-"):
+            clean.append(p2)
+    # mantener orden y unicidad
+    return list(dict.fromkeys(clean))
 
 
 def extract_tags_from_text(text):
@@ -97,7 +141,8 @@ def create_schema(conn, maria=False):
             alt_art BOOLEAN,
             color_ids TEXT,
             type_ids TEXT,
-            tag_ids TEXT
+            tag_ids TEXT,
+            trait_ids TEXT
         );
 
         CREATE TABLE IF NOT EXISTS traits(id INTEGER PRIMARY KEY AUTOINCREMENT, trait TEXT UNIQUE);
@@ -168,7 +213,8 @@ def create_schema(conn, maria=False):
             alt_art BOOLEAN,
             color_ids TEXT,
             type_ids TEXT,
-            tag_ids TEXT
+            tag_ids TEXT,
+            trait_ids TEXT
         ) ENGINE=InnoDB;
         """
         )
@@ -194,6 +240,7 @@ def create_schema(conn, maria=False):
             ("card_colors", "card_id", "color_id"),
             ("card_types", "card_id", "type_id"),
             ("card_tags", "card_id", "tag_id"),
+            ("card_traits", "card_id", "trait_id"),
         ]:
             cur.execute(
                 f"CREATE TABLE IF NOT EXISTS {tbl}({a} INT, {b} INT, PRIMARY KEY({a},{b})) ENGINE=InnoDB;"
@@ -217,14 +264,27 @@ def get_or_create(conn, table, col, value, maria=False):
         return None
     cur = conn.cursor()
     ph = "%s" if maria else "?"
+    # SELECT
     cur.execute(f"SELECT id FROM {table} WHERE {col}={ph}", (value,))
     row = cur.fetchone()
     if row:
-        return row[0]
-    cur.execute(f"INSERT INTO {table}({col}) VALUES ({ph})", (value,))
-    if not maria:
+        # sqlite returns tuple-like, pymysql may return tuple; handle both
+        try:
+            return row[0]
+        except Exception:
+            return row
+    # INSERT
+    if maria:
+        cur.execute(f"INSERT IGNORE INTO {table}({col}) VALUES ({ph})", (value,))
+        # autocommit True when using pymysql in this script, so no explicit commit needed
+        # fetch id
+        cur.execute(f"SELECT id FROM {table} WHERE {col}=%s", (value,))
+        row2 = cur.fetchone()
+        return row2[0] if row2 else None
+    else:
+        cur.execute(f"INSERT OR IGNORE INTO {table}({col}) VALUES ({ph})", (value,))
         conn.commit()
-    return cur.lastrowid
+        return cur.lastrowid
 
 
 def process_csv_to_db(conn, csv_path, maria=False):
@@ -232,7 +292,7 @@ def process_csv_to_db(conn, csv_path, maria=False):
     placeholder = "%s" if maria else "?"
     cur = conn.cursor()
     for _, r in track(df.iterrows(), total=len(df)):
-        rarity = r["rarity"].strip()
+        rarity = r["rarity"].strip() if "rarity" in r and r["rarity"] is not None else ""
         alt_art = "+" in rarity
         zone_id = get_or_create(conn, "zones", "zone", r["zone"].strip(), maria)
         link_id = get_or_create(conn, "links", "link", r["link"].strip(), maria)
@@ -240,32 +300,45 @@ def process_csv_to_db(conn, csv_path, maria=False):
         belongs_gd_id = get_or_create(
             conn, "belongs_gd", "belongs_gd", r["belongs_gd"].strip(), maria
         )
-        colors = split_multi_values(r["color"])
-        types = split_multi_values(r["type"])
-        tags = extract_tags_from_text(r["text_card"])
-        traits = split_multi_values(r.get("trait", ""))
+
+        colors = split_multi_values(r.get("color", ""))
+        types = split_multi_values(r.get("type", ""))
+        # traits: parse properly (preserve multi-word traits)
+        traits = split_traits(r.get("trait", ""))
+        # tags: extracted from text_card (<...> and 【...】)
+        tags = extract_tags_from_text(r.get("text_card", ""))
+
         color_ids = [get_or_create(conn, "colors", "color", c, maria) for c in colors]
         type_ids = [get_or_create(conn, "types", "type", t, maria) for t in types]
         tag_ids = [get_or_create(conn, "tags", "tag", t, maria) for t in tags]
         trait_ids = [get_or_create(conn, "traits", "trait", t, maria) for t in traits]
-        img_url = r["img"].strip()
+
+        img_url = r.get("img", "").strip()
         img_name = ""
         if img_url:
             base = os.path.basename(img_url)
             base = base.split(".webp")[0]
             img_name = base
-        sql = f"INSERT OR IGNORE INTO cards (gd,name,rarity,level,cost,text_card,zone_id,link_id,ap,hp,anime_id,belongs_gd_id,img,alt_art,color_ids,type_ids,tag_ids) VALUES ({','.join([placeholder]*17)})"
+
+        # Insert card — incluir trait_ids en la tabla cards
+        cols = "gd,name,rarity,level,cost,text_card,zone_id,link_id,ap,hp,anime_id,belongs_gd_id,img,alt_art,color_ids,type_ids,tag_ids,trait_ids"
+        placeholders = ",".join([placeholder] * 18)
+        if maria:
+            sql = f"INSERT IGNORE INTO cards ({cols}) VALUES ({placeholders})"
+        else:
+            sql = f"INSERT OR IGNORE INTO cards ({cols}) VALUES ({placeholders})"
+
         params = (
-            r["GD"].strip(),
-            r["name"].strip(),
+            r.get("GD", "").strip(),
+            r.get("name", "").strip(),
             rarity,
-            safe_int(r["level"]),
-            safe_int(r["cost"]),
-            r["text_card"].strip(),
+            safe_int(r.get("level", "")),
+            safe_int(r.get("cost", "")),
+            r.get("text_card", "").strip(),
             zone_id,
             link_id,
-            r["ap"].strip(),
-            r["hp"].strip(),
+            r.get("ap", "").strip(),
+            r.get("hp", "").strip(),
             anime_id,
             belongs_gd_id,
             img_name,
@@ -273,9 +346,21 @@ def process_csv_to_db(conn, csv_path, maria=False):
             ",".join(map(str, color_ids)),
             ",".join(map(str, type_ids)),
             ",".join(map(str, tag_ids)),
+            ",".join(map(str, trait_ids)),
         )
         cur.execute(sql, params)
-        card_id = cur.lastrowid
+        card_id = getattr(cur, "lastrowid", None)
+        # pymysql cursor may not populate lastrowid reliably depending on cursor; try to fetch by GD+name if needed
+        if not card_id:
+            try:
+                # si GD existe, recuperar id (asumiendo GD único por carta)
+                cur.execute("SELECT id FROM cards WHERE gd=%s" if maria else "SELECT id FROM cards WHERE gd=?", (r.get("GD", "").strip(),))
+                rr = cur.fetchone()
+                card_id = rr[0] if rr else None
+            except Exception:
+                card_id = None
+
+        # Insert relations into link tables (card_colors, card_types, card_tags, card_traits)
         for table, ids in [
             ("card_colors", color_ids),
             ("card_types", type_ids),
@@ -283,6 +368,8 @@ def process_csv_to_db(conn, csv_path, maria=False):
             ("card_traits", trait_ids),
         ]:
             for tid in ids:
+                if tid is None:
+                    continue
                 if maria:
                     cur.execute(
                         f"INSERT IGNORE INTO {table} VALUES ({placeholder},{placeholder})",

@@ -148,7 +148,9 @@ def _open_dropdown(page):
             page.wait_for_selector(".filterListItems", timeout=5000)
         console.print("[green]✅ Expansion dropdown opened successfully.[/green]")
     except Exception as e:
-        console.print(f"[yellow]⚠️ Could not open expansion dropdown, ignoring: {e}[/yellow]")
+        console.print(
+            f"[yellow]⚠️ Could not open expansion dropdown, ignoring: {e}[/yellow]"
+        )
 
 
 def _get_packages(page):
@@ -246,39 +248,71 @@ def _iterate_cards(page, base_url, first_key, first_data):
     records = [first_data]
     prev_key = first_key
     count_since_pause = 1
+
     while True:
         try:
             next_btn = page.locator('button.fancybox-button[title="Next"]').first
-            if not next_btn:
+            if (
+                not next_btn
+                or not next_btn.is_visible()
+                or not next_btn.is_enabled()
+                or next_btn.get_attribute("disabled") is not None
+            ):
+                console.print(
+                    "[green]✅ No more cards. Finished scraping this package.[/green]"
+                )
                 break
-            disabled_attr = next_btn.get_attribute("disabled")
-            cls = next_btn.get_attribute("class") or ""
-            if disabled_attr is not None or "disabled" in (cls or ""):
-                break
-            if not next_btn.is_visible() or not next_btn.is_enabled():
-                break
+
             next_btn.scroll_into_view_if_needed()
             next_btn.click()
         except Exception as e:
             console.print(f"[red]Could not click Next button: {e}[/red]")
             break
 
-        if not _wait_for_new_card(page, prev_key, timeout=15):
-            console.print("[yellow]Timeout waiting for a new card.[/yellow]")
+        start_time = time.time()
+        loaded = False
+        while time.time() - start_time < 15:
+            try:
+                frame = _get_detail_frame(page, timeout=5000)
+                gd = frame.query_selector(".cardNo")
+                name = frame.query_selector(".cardName")
+                rarity = frame.query_selector(".rarity")
+                belongs = frame.query_selector('dl dt:has-text("Where to get it") + dd')
+                if gd and name and rarity:
+                    cur_key = (
+                        gd.inner_text().strip(),
+                        name.inner_text().strip(),
+                        rarity.inner_text().strip(),
+                        belongs.inner_text().strip() if belongs else "",
+                    )
+                    if cur_key != prev_key:
+                        loaded = True
+                        break
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+        if not loaded:
+            console.print(
+                "[yellow]⚠️ Timeout waiting for new card. Stopping iteration.[/yellow]"
+            )
             break
+
         try:
             frame = _get_detail_frame(page, timeout=10000)
             cur = _extract_from_frame(frame, base_url)
         except Exception as e:
             console.print(f"[yellow]Error extracting data: {e}[/yellow]")
             continue
-        cur_key = (cur["GD"], cur["name"], cur["rarity"], cur["belongs_gd"])
-        if cur_key == first_key:
-            console.print("[green]Reached first card again. Scraping finished.[/green]")
-            break
+
         records.append(cur)
-        prev_key = cur_key
-        console.print(f"[green]Scraping card #{len(records)}: {cur_key}[/green]")
+        prev_key = (
+            cur["GD"],
+            cur["name"],
+            cur["rarity"],
+            cur["belongs_gd"],
+        )
+        console.print(f"[green]Scraping card #{len(records)}: {prev_key}[/green]")
 
         count_since_pause += 1
         if count_since_pause >= PAUSE_EVERY_CARDS:
@@ -286,6 +320,7 @@ def _iterate_cards(page, base_url, first_key, first_data):
             time.sleep(PAUSE_TIME)
             count_since_pause = 0
 
+    # Cierra fancybox al final
     _close_fancybox_if_open(page)
     return records
 
@@ -303,7 +338,10 @@ def _save_to_csv(records):
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
         for r in records:
-            row = {field: (r.get(field) if r.get(field) not in (None, "") else "NULL") for field in FIELDNAMES}
+            row = {
+                field: (r.get(field) if r.get(field) not in (None, "") else "NULL")
+                for field in FIELDNAMES
+            }
             writer.writerow(row)
     console.print(f"[green]✅ {len(records)} records saved to {OUTPUT_CSV}[/green]")
 
@@ -312,7 +350,9 @@ def run_scraper(output_csv):
     global OUTPUT_CSV
     OUTPUT_CSV = output_csv
     existing_records = _load_existing_csv()
-    existing_packages = set(r["belongs_gd"] for r in existing_records if r.get("belongs_gd"))
+    existing_packages = set(
+        r["belongs_gd"] for r in existing_records if r.get("belongs_gd")
+    )
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS, args=["--start-maximized"])
@@ -334,10 +374,14 @@ def run_scraper(output_csv):
             pkg_text = pkg["text"]
             pkg_val = pkg["val"]
             if pkg_text.strip().upper() == "ALL" or pkg_text in existing_packages:
-                console.print(f"[yellow]Package '{pkg_text}' already exists or skipped.[/yellow]")
+                console.print(
+                    f"[yellow]Package '{pkg_text}' already exists or skipped.[/yellow]"
+                )
                 continue
 
-            console.print(f"[magenta]Processing package: {pkg_text} (val={pkg_val})[/magenta]")
+            console.print(
+                f"[magenta]Processing package: {pkg_text} (val={pkg_val})[/magenta]"
+            )
             succeeded = False
             attempts = 0
 
@@ -348,9 +392,13 @@ def run_scraper(output_csv):
                     _open_dropdown(page)
                     _select_package(page, pkg_val, pkg_text)
                     try:
-                        page.wait_for_selector("li.cardItem a.cardStr[data-fancybox]", timeout=15000)
+                        page.wait_for_selector(
+                            "li.cardItem a.cardStr[data-fancybox]", timeout=15000
+                        )
                     except Exception:
-                        console.print(f"[yellow]No cards found for package '{pkg_text}', skipping.[/yellow]")
+                        console.print(
+                            f"[yellow]No cards found for package '{pkg_text}', skipping.[/yellow]"
+                        )
                         succeeded = True
                         break
 
@@ -362,25 +410,39 @@ def run_scraper(output_csv):
                         if not r.get("belongs_gd"):
                             r["belongs_gd"] = pkg_text
 
-                    all_records = [r for r in all_records if r.get("belongs_gd") != pkg_text]
+                    all_records = [
+                        r for r in all_records if r.get("belongs_gd") != pkg_text
+                    ]
                     all_records.extend(temp_records)
                     _save_to_csv(all_records)
 
-                    console.print(f"[green]Package '{pkg_text}' scraped successfully: {len(temp_records)} cards.[/green]")
+                    console.print(
+                        f"[green]Package '{pkg_text}' scraped successfully: {len(temp_records)} cards.[/green]"
+                    )
                     succeeded = True
 
-                    console.print(f"[cyan]Waiting {WAIT_BETWEEN_PACKAGES}s before next package...[/cyan]")
+                    console.print(
+                        f"[cyan]Waiting {WAIT_BETWEEN_PACKAGES}s before next package...[/cyan]"
+                    )
                     time.sleep(WAIT_BETWEEN_PACKAGES)
                 except Exception as e:
-                    console.print(f"[red]Error scraping package '{pkg_text}' (attempt {attempts}): {e}[/red]")
+                    console.print(
+                        f"[red]Error scraping package '{pkg_text}' (attempt {attempts}): {e}[/red]"
+                    )
                     _close_fancybox_if_open(page)
-                    all_records = [r for r in all_records if r.get("belongs_gd") != pkg_text]
+                    all_records = [
+                        r for r in all_records if r.get("belongs_gd") != pkg_text
+                    ]
                     _save_to_csv(all_records)
-                    console.print(f"[yellow]Retrying package '{pkg_text}' after {WAIT_BETWEEN_PACKAGES}s...[/yellow]")
+                    console.print(
+                        f"[yellow]Retrying package '{pkg_text}' after {WAIT_BETWEEN_PACKAGES}s...[/yellow]"
+                    )
                     time.sleep(WAIT_BETWEEN_PACKAGES)
 
             if not succeeded:
-                console.print(f"[red]Failed package '{pkg_text}' after {MAX_RETRIES_PER_PACKAGE} attempts, skipping.[/red]")
+                console.print(
+                    f"[red]Failed package '{pkg_text}' after {MAX_RETRIES_PER_PACKAGE} attempts, skipping.[/red]"
+                )
 
         _save_to_csv(all_records)
         browser.close()

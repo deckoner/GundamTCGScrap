@@ -1,6 +1,6 @@
 ===============================================================
 DATABASE STRUCTURE DOCUMENTATION  
-Card Management & User System  
+Card Management & User System (UPDATED)
 ===============================================================
 
 ---------------------------------------------------------------
@@ -35,6 +35,10 @@ Columns:
 - color_ids (TEXT): Cached list of associated color IDs.
 - type_ids (TEXT): Cached list of associated type IDs.
 - tag_ids (TEXT): Cached list of associated tag IDs.
+- trait_ids (TEXT): Cached list of associated trait IDs.  
+  Notes:  
+  - Traits are parsed as full phrases, preserving multi-word traits like `Earth Federation`, `White Base Team`, `Civilian`.
+  - Text such as `(White Base Team) Trait` is cleaned and normalized into trait entries.
 
 Notes:
 - The image name is extracted automatically from the URL in the CSV file.
@@ -44,6 +48,7 @@ Relationships:
 - Many-to-many with colors (via card_colors)
 - Many-to-many with types (via card_types)
 - Many-to-many with tags (via card_tags)
+- Many-to-many with traits (via card_traits)
 
 
 ---------------------------------------------------------------
@@ -61,6 +66,13 @@ TABLE: types
 TABLE: tags  
 - id (INTEGER, PK, AUTOINCREMENT)  
 - tag (TEXT, UNIQUE)
+
+TABLE: traits  
+- id (INTEGER, PK, AUTOINCREMENT)  
+- trait (TEXT, UNIQUE)  
+Notes:  
+- Stores all unique traits extracted from cards.  
+- Multi-word traits are preserved.
 
 TABLE: zones  
 - id (INTEGER, PK, AUTOINCREMENT)  
@@ -100,6 +112,12 @@ Purpose: Many-to-many relation between cards and tags.
 - card_id (INT, FK → cards.id)  
 - tag_id (INT, FK → tags.id)  
 PRIMARY KEY (card_id, tag_id)
+
+TABLE: card_traits  
+Purpose: Many-to-many relation between cards and traits.  
+- card_id (INT, FK → cards.id)  
+- trait_id (INT, FK → traits.id)  
+PRIMARY KEY (card_id, trait_id)
 
 
 ---------------------------------------------------------------
@@ -162,7 +180,6 @@ Relationships:
 - Belongs to one user (deck owner).
 - Many-to-many with cards via deck_cards.
 
-
 TABLE: deck_cards
 ---------------------------------------------------------------
 Purpose:  
@@ -192,6 +209,7 @@ decks (1) ────< deck_cards >──── (∞) cards
 cards (∞) ────< card_colors >──── (∞) colors  
 cards (∞) ────< card_types >──── (∞) types  
 cards (∞) ────< card_tags >──── (∞) tags  
+cards (∞) ────< card_traits >──── (∞) traits  
 cards (∞) ────> zones / links / animes / belongs_gd (1)
 
 All foreign keys use ON DELETE CASCADE for automatic cleanup.
@@ -206,6 +224,7 @@ All foreign keys use ON DELETE CASCADE for automatic cleanup.
 - The "quantity" fields allow tracking card duplicates in collections and decks.
 - All text fields are stored in UTF-8 encoding.
 - The `img` field now stores **only the card image base name**, not a full URL.
+- Traits are stored as full phrases; multi-word traits are preserved.
 - Foreign key constraints are enforced when PRAGMA foreign_keys = ON (SQLite).
 - Users and decks can be extended easily for multiplayer or online sync features.
 

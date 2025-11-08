@@ -14,10 +14,10 @@ def main():
     db_name = "GundamDB"
 
     console.print("[cyan]Starting scraper...[/cyan]")
-    run_scraper(csv_name)
+    # run_scraper(csv_name)
 
     console.print("[cyan]Building database...[/cyan]")
-    #build_database(csv_name, use_sqlite, db_name)
+    build_database(csv_name, use_sqlite, db_name)
 
     if os.path.exists(csv_name):
         console.print("[cyan]Downloading and optimizing images...[/cyan]")
