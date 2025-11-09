@@ -15,11 +15,20 @@ except ImportError:
 
 
 def split_multi_values(s):
+    """
+    Divide un texto que contiene múltiples valores separados por delimitadores comunes
+    (como comas, barras, punto y coma, o 'y') en una lista de valores limpios y únicos.
+
+    Args:
+        s (str | int | float): Texto o número a procesar.
+
+    Returns:
+        list[str]: Lista de valores únicos, sin duplicados ni entradas vacías.
+    """
     if pd.isna(s) or s == "":
         return []
     if isinstance(s, (int, float)):
         s = str(s)
-    # sólo dividir por delimitadores claros: coma, /, ;, |, " y " (español) o dos o más espacios
     s = s.strip()
     parts = re.split(r"[\/;,|]+|\s{2,}|\s+y\s+", s)
     cleaned = [
@@ -29,12 +38,21 @@ def split_multi_values(s):
 
 
 def split_traits(s):
-    """Parsea la columna 'trait' conservando nombres compuestos como
-    'Earth Federation' o 'White Base Team' y manejando formatos como:
-    - 'Earth Federation y White Base Team'
-    - '(White Base Team) Trait'
-    - 'NULL' / 'None' / '-'
-    Devuelve una lista única preservando el orden.
+    """
+    Procesa la columna 'trait' de una carta para extraer los rasgos (traits)
+    de forma segura y consistente, conservando los nombres compuestos
+    y eliminando texto residual.
+
+    Maneja formatos como:
+        - 'Earth Federation y White Base Team'
+        - '(White Base Team) Trait'
+        - 'NULL', 'None' o '-'
+
+    Args:
+        s (str): Texto de entrada con los traits.
+
+    Returns:
+        list[str]: Lista de traits únicos y limpios.
     """
     if pd.isna(s) or str(s).strip() == "":
         return []
@@ -43,34 +61,34 @@ def split_traits(s):
     if raw.upper() in ("NULL", "NONE", "-"):
         return []
 
-    # Extraer tokens entre paréntesis primero (suelen indicar traits exactos)
     paren = re.findall(r"\(([^)]+)\)", raw)
-    # Remover los paréntesis del texto para no volver a procesarlos
     text_no_paren = re.sub(r"\([^)]+\)", " ", raw)
-
-    # Unificar delimitadores comunes (coma, /, ;, |, ' y ' en español)
-    normalized = re.sub(r"[\/;|\u3001]", "|||", text_no_paren)  # \u3001 (ideographic comma) por si aparece
+    normalized = re.sub(r"[\/;|\u3001]", "|||", text_no_paren)
     normalized = re.sub(r"\s+y\s+", "|||", normalized, flags=re.IGNORECASE)
-    # también dividir en varias espacios (dos o más)
     normalized = re.sub(r"\s{2,}", "|||", normalized)
-
     parts = [p.strip() for p in normalized.split("|||") if p.strip()]
-
     combined = paren + parts
 
     clean = []
     for p in combined:
-        # quitar la palabra 'Trait' si aparece y otros residuos
         p2 = re.sub(r"\bTrait\b", "", p, flags=re.IGNORECASE).strip()
-        # quitar corchetes u otros caracteres sobrantes
         p2 = p2.strip("[] ,;:（）()")
         if p2 and p2.upper() not in ("NULL", "NONE", "-"):
             clean.append(p2)
-    # mantener orden y unicidad
     return list(dict.fromkeys(clean))
 
 
 def extract_tags_from_text(text):
+    """
+    Extrae etiquetas (tags) del texto de una carta, buscando patrones entre
+    los delimitadores '<...>' y '【...】'.
+
+    Args:
+        text (str): Texto de la carta.
+
+    Returns:
+        list[str]: Lista de etiquetas únicas encontradas.
+    """
     if pd.isna(text) or not isinstance(text, str):
         return []
     tags = re.findall(r"<([^>]+)>", text) + re.findall(r"【([^】]+)】", text)
@@ -83,6 +101,15 @@ def extract_tags_from_text(text):
 
 
 def safe_int(x):
+    """
+    Convierte un valor a entero de forma segura, devolviendo None si no es posible.
+
+    Args:
+        x (any): Valor a convertir.
+
+    Returns:
+        int | None: Entero convertido o None si no es válido.
+    """
     try:
         if pd.isna(x) or x == "":
             return None
@@ -95,17 +122,40 @@ def safe_int(x):
 
 
 def connect_sqlite(db):
+    """
+    Establece una conexión con una base de datos SQLite.
+
+    Args:
+        db (str): Nombre del archivo .sqlite.
+
+    Returns:
+        sqlite3.Connection: Conexión abierta a la base de datos.
+    """
     return sqlite3.connect(db)
 
 
 def connect_mariadb(db):
+    """
+    Conecta con una base de datos MariaDB utilizando las credenciales del archivo .env.
+
+    Variables de entorno requeridas:
+        - DB_HOST
+        - DB_USER
+        - DB_PASSWORD
+
+    Args:
+        db (str): Nombre de la base de datos.
+
+    Returns:
+        pymysql.Connection: Conexión a la base de datos MariaDB.
+    """
     load_dotenv()
     host = os.getenv("DB_HOST", "localhost")
     user = os.getenv("DB_USER", "root")
     password = os.getenv("DB_PASSWORD", "")
     if not db:
-        console.print("[red]ERROR: Missing DB_NAME in .env file[/red]")
-        raise RuntimeError("DB_NAME not defined in .env")
+        console.print("[red]ERROR: Falta DB_NAME en el archivo .env[/red]")
+        raise RuntimeError("DB_NAME no definido en .env")
     connection = pymysql.connect(
         host=host,
         user=user,
@@ -118,6 +168,18 @@ def connect_mariadb(db):
 
 
 def create_schema(conn, maria=False):
+    """
+    Crea el esquema de tablas para la base de datos (SQLite o MariaDB).
+
+    Incluye:
+        - Tablas principales de cartas y atributos (traits, colors, types, etc.)
+        - Tablas de relación (card_traits, card_colors, etc.)
+        - Tablas de usuario, colección y mazos.
+
+    Args:
+        conn: Conexión activa a la base de datos.
+        maria (bool): True si se usa MariaDB, False para SQLite.
+    """
     cur = conn.cursor()
     if not maria:
         cur.executescript(
@@ -260,24 +322,32 @@ def create_schema(conn, maria=False):
 
 
 def get_or_create(conn, table, col, value, maria=False):
+    """
+    Obtiene el ID de un valor existente en una tabla o lo crea si no existe.
+
+    Args:
+        conn: Conexión a la base de datos.
+        table (str): Nombre de la tabla.
+        col (str): Nombre de la columna.
+        value (str): Valor a buscar o insertar.
+        maria (bool): True si se usa MariaDB.
+
+    Returns:
+        int | None: ID del registro correspondiente.
+    """
     if not value:
         return None
     cur = conn.cursor()
     ph = "%s" if maria else "?"
-    # SELECT
     cur.execute(f"SELECT id FROM {table} WHERE {col}={ph}", (value,))
     row = cur.fetchone()
     if row:
-        # sqlite returns tuple-like, pymysql may return tuple; handle both
         try:
             return row[0]
         except Exception:
             return row
-    # INSERT
     if maria:
         cur.execute(f"INSERT IGNORE INTO {table}({col}) VALUES ({ph})", (value,))
-        # autocommit True when using pymysql in this script, so no explicit commit needed
-        # fetch id
         cur.execute(f"SELECT id FROM {table} WHERE {col}=%s", (value,))
         row2 = cur.fetchone()
         return row2[0] if row2 else None
@@ -288,11 +358,27 @@ def get_or_create(conn, table, col, value, maria=False):
 
 
 def process_csv_to_db(conn, csv_path, maria=False):
+    """
+    Importa los datos del archivo CSV al esquema de la base de datos.
+
+    Este proceso:
+      - Lee el CSV generado por el scraper.
+      - Limpia y normaliza cada campo.
+      - Inserta cartas, atributos y relaciones en sus respectivas tablas.
+      - Establece las claves foráneas y relaciones N:M (traits, tags, etc.)
+
+    Args:
+        conn: Conexión activa a la base de datos.
+        csv_path (str): Ruta al archivo CSV.
+        maria (bool): True si se usa MariaDB.
+    """
     df = pd.read_csv(csv_path, dtype=str).fillna("")
     placeholder = "%s" if maria else "?"
     cur = conn.cursor()
     for _, r in track(df.iterrows(), total=len(df)):
-        rarity = r["rarity"].strip() if "rarity" in r and r["rarity"] is not None else ""
+        rarity = (
+            r["rarity"].strip() if "rarity" in r and r["rarity"] is not None else ""
+        )
         alt_art = "+" in rarity
         zone_id = get_or_create(conn, "zones", "zone", r["zone"].strip(), maria)
         link_id = get_or_create(conn, "links", "link", r["link"].strip(), maria)
@@ -303,9 +389,7 @@ def process_csv_to_db(conn, csv_path, maria=False):
 
         colors = split_multi_values(r.get("color", ""))
         types = split_multi_values(r.get("type", ""))
-        # traits: parse properly (preserve multi-word traits)
         traits = split_traits(r.get("trait", ""))
-        # tags: extracted from text_card (<...> and 【...】)
         tags = extract_tags_from_text(r.get("text_card", ""))
 
         color_ids = [get_or_create(conn, "colors", "color", c, maria) for c in colors]
@@ -320,7 +404,6 @@ def process_csv_to_db(conn, csv_path, maria=False):
             base = base.split(".webp")[0]
             img_name = base
 
-        # Insert card — incluir trait_ids en la tabla cards
         cols = "gd,name,rarity,level,cost,text_card,zone_id,link_id,ap,hp,anime_id,belongs_gd_id,img,alt_art,color_ids,type_ids,tag_ids,trait_ids"
         placeholders = ",".join([placeholder] * 18)
         if maria:
@@ -350,17 +433,21 @@ def process_csv_to_db(conn, csv_path, maria=False):
         )
         cur.execute(sql, params)
         card_id = getattr(cur, "lastrowid", None)
-        # pymysql cursor may not populate lastrowid reliably depending on cursor; try to fetch by GD+name if needed
         if not card_id:
             try:
-                # si GD existe, recuperar id (asumiendo GD único por carta)
-                cur.execute("SELECT id FROM cards WHERE gd=%s" if maria else "SELECT id FROM cards WHERE gd=?", (r.get("GD", "").strip(),))
+                cur.execute(
+                    (
+                        "SELECT id FROM cards WHERE gd=%s"
+                        if maria
+                        else "SELECT id FROM cards WHERE gd=?"
+                    ),
+                    (r.get("GD", "").strip(),),
+                )
                 rr = cur.fetchone()
                 card_id = rr[0] if rr else None
             except Exception:
                 card_id = None
 
-        # Insert relations into link tables (card_colors, card_types, card_tags, card_traits)
         for table, ids in [
             ("card_colors", color_ids),
             ("card_types", type_ids),
@@ -384,6 +471,31 @@ def process_csv_to_db(conn, csv_path, maria=False):
 
 
 def build_database(csv_path, use_sqlite=True, db_name="GundamDB"):
+    """
+    Construye una base de datos completa a partir del archivo CSV generado por el scraper.
+
+    Este proceso:
+        1. Conecta a la base de datos (SQLite o MariaDB según el parámetro `use_sqlite`).
+        2. Crea todas las tablas necesarias mediante `create_schema()`.
+        3. Importa los datos del CSV a las tablas con `process_csv_to_db()`.
+        4. Cierra la conexión y confirma la finalización.
+
+    Args:
+        csv_path (str): Ruta al archivo CSV que contiene los datos de las cartas.
+        use_sqlite (bool, opcional): Si es True, usa SQLite (modo local).
+            Si es False, usa MariaDB con las credenciales definidas en `.env`.
+        db_name (str, opcional): Nombre de la base de datos (sin extensión .sqlite).
+
+    Returns:
+        None
+
+    Ejemplo:
+        build_database("gundam_cards.csv", use_sqlite=True, db_name="GundamDB")
+        [cyan]Connecting to SQLite database...[/cyan]
+        [cyan]Creating database schema...[/cyan]
+        [cyan]Importing CSV data into database...[/cyan]
+        [green]Database 'GundamDB' ready.[/green]
+    """
     console.print(
         f"[cyan]Connecting to {'SQLite' if use_sqlite else 'MariaDB'} database...[/cyan]"
     )

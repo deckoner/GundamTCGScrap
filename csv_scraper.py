@@ -37,6 +37,16 @@ FIELDNAMES = [
 
 
 def _find_dd_by_dt(frame, wanted):
+    """
+    Busca en un elemento <dl> el valor (<dd>) correspondiente a un título (<dt>) específico.
+
+    Args:
+        frame: Objeto de frame de Playwright en el que buscar.
+        wanted (str): Texto del <dt> que se desea encontrar.
+
+    Returns:
+        str | None: El valor encontrado en el <dd>, o None si no se encuentra.
+    """
     dls = frame.query_selector_all("dl")
     for dl in dls:
         dt = dl.query_selector("dt")
@@ -57,11 +67,32 @@ def _find_dd_by_dt(frame, wanted):
 
 
 def _get_detail_frame(page, timeout=10000):
+    """
+    Espera y obtiene el iframe que contiene el detalle de una carta.
+
+    Args:
+        page: Objeto Page de Playwright.
+        timeout (int): Tiempo máximo de espera en milisegundos.
+
+    Returns:
+        Frame: El frame con el contenido de detalle.
+    """
     iframe_el = page.wait_for_selector('iframe[src*="detail.php"]', timeout=timeout)
     return iframe_el.content_frame()
 
 
 def _extract_from_frame(frame, base_url):
+    """
+    Extrae los datos relevantes de una carta desde el frame de detalle.
+
+    Args:
+        frame: Frame de Playwright con la información de la carta.
+        base_url (str): URL base del sitio, usada para completar URLs relativas.
+
+    Returns:
+        dict: Diccionario con los datos de la carta.
+    """
+
     def safe_text(selector):
         el = frame.query_selector(selector)
         if not el:
@@ -125,18 +156,30 @@ def _extract_from_frame(frame, base_url):
 
 
 def _reject_cookies(page):
+    """
+    Intenta rechazar las cookies del sitio si el botón correspondiente está disponible.
+
+    Args:
+        page: Página actual de Playwright.
+    """
     try:
         reject_btn = page.locator("#onetrust-reject-all-handler")
         reject_btn.wait_for(timeout=8000)
         reject_btn.scroll_into_view_if_needed()
         reject_btn.click(force=True)
         page.wait_for_timeout(1000)
-        console.print("[green]✅ Cookies rejected successfully.[/green]")
+        console.print("[green]✅ Cookies rechazadas correctamente.[/green]")
     except Exception as e:
-        console.print(f"[yellow]⚠️ Could not reject cookies: {e}[/yellow]")
+        console.print(f"[yellow]⚠️ No se pudieron rechazar las cookies: {e}[/yellow]")
 
 
 def _open_dropdown(page):
+    """
+    Abre el menú desplegable de expansiones para mostrar las opciones disponibles.
+
+    Args:
+        page: Página de Playwright actual.
+    """
     try:
         toggle = page.locator(
             '.toggleBtn.js-toggle[data-toggleelem="js-toggle--01"]'
@@ -146,14 +189,21 @@ def _open_dropdown(page):
         page.wait_for_timeout(1000)
         if not page.locator(".filterListItems").count():
             page.wait_for_selector(".filterListItems", timeout=5000)
-        console.print("[green]✅ Expansion dropdown opened successfully.[/green]")
+        console.print("[green]✅ Menú de expansiones abierto correctamente.[/green]")
     except Exception as e:
-        console.print(
-            f"[yellow]⚠️ Could not open expansion dropdown, ignoring: {e}[/yellow]"
-        )
+        console.print(f"[yellow]⚠️ No se pudo abrir el menú desplegable: {e}[/yellow]")
 
 
 def _get_packages(page):
+    """
+    Obtiene la lista de paquetes o expansiones disponibles desde la página.
+
+    Args:
+        page: Página de Playwright.
+
+    Returns:
+        list[dict]: Lista de paquetes con su texto, valor y estado.
+    """
     pkgs = page.evaluate(
         """() => {
             return Array.from(document.querySelectorAll('a.js-selectBtn-package')).map(a => ({
@@ -167,6 +217,14 @@ def _get_packages(page):
 
 
 def _select_package(page, data_val, visible_text=None):
+    """
+    Selecciona un paquete por su valor interno o texto visible.
+
+    Args:
+        page: Página de Playwright.
+        data_val (str): Valor del atributo 'data-val' del paquete.
+        visible_text (str, opcional): Texto visible del paquete.
+    """
     if data_val:
         page.evaluate(
             """(val) => {
@@ -187,12 +245,24 @@ def _select_package(page, data_val, visible_text=None):
 
 
 def _click_first_card(page):
+    """
+    Hace clic en la primera carta de la lista para abrir su detalle.
+
+    Args:
+        page: Página de Playwright.
+    """
     page.wait_for_selector("li.cardItem a.cardStr[data-fancybox]", timeout=15000)
     first_card_anchor = page.locator("li.cardItem a.cardStr").first
     first_card_anchor.click()
 
 
 def _close_fancybox_if_open(page):
+    """
+    Cierra el cuadro de diálogo (fancybox) si está abierto.
+
+    Args:
+        page: Página de Playwright.
+    """
     try:
         close_btn = page.locator('button.fancybox-button[title="Close"]').first
         if close_btn and close_btn.is_visible():
@@ -207,6 +277,16 @@ def _close_fancybox_if_open(page):
 
 
 def _extract_first_card(page, base_url):
+    """
+    Extrae la información de la primera carta del paquete seleccionado.
+
+    Args:
+        page: Página de Playwright.
+        base_url (str): URL base del sitio.
+
+    Returns:
+        tuple: (datos de la carta, clave única de la carta)
+    """
     frame = _get_detail_frame(page, timeout=10000)
     first_data = _extract_from_frame(frame, base_url)
     key = (
@@ -215,36 +295,23 @@ def _extract_first_card(page, base_url):
         first_data["rarity"],
         first_data["belongs_gd"],
     )
-    console.print(f"[cyan]First card found: {key}[/cyan]")
+    console.print(f"[cyan]Primera carta encontrada: {key}[/cyan]")
     return first_data, key
 
 
-def _wait_for_new_card(page, prev_key, timeout=15):
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        try:
-            frame = _get_detail_frame(page, timeout=5000)
-            gd = frame.query_selector(".cardNo")
-            name = frame.query_selector(".cardName")
-            rarity = frame.query_selector(".rarity")
-            belongs = frame.query_selector('dl dt:has-text("Where to get it") + dd')
-            if not gd or not name or not rarity:
-                continue
-            key = (
-                gd.inner_text().strip(),
-                name.inner_text().strip(),
-                rarity.inner_text().strip(),
-                belongs.inner_text().strip() if belongs else "",
-            )
-            if key != prev_key:
-                return True
-        except Exception:
-            pass
-        time.sleep(0.1)
-    return False
-
-
 def _iterate_cards(page, base_url, first_key, first_data):
+    """
+    Itera sobre todas las cartas de un paquete, navegando con el botón "Next".
+
+    Args:
+        page: Página actual.
+        base_url (str): URL base para construir enlaces de imágenes.
+        first_key (tuple): Clave de la primera carta.
+        first_data (dict): Datos de la primera carta.
+
+    Returns:
+        list[dict]: Lista de todas las cartas del paquete.
+    """
     records = [first_data]
     prev_key = first_key
     count_since_pause = 1
@@ -258,15 +325,13 @@ def _iterate_cards(page, base_url, first_key, first_data):
                 or not next_btn.is_enabled()
                 or next_btn.get_attribute("disabled") is not None
             ):
-                console.print(
-                    "[green]✅ No more cards. Finished scraping this package.[/green]"
-                )
+                console.print("[green]✅ No hay más cartas en el paquete.[/green]")
                 break
 
             next_btn.scroll_into_view_if_needed()
             next_btn.click()
         except Exception as e:
-            console.print(f"[red]Could not click Next button: {e}[/red]")
+            console.print(f"[red]Error al hacer clic en 'Next': {e}[/red]")
             break
 
         start_time = time.time()
@@ -293,16 +358,14 @@ def _iterate_cards(page, base_url, first_key, first_data):
             time.sleep(0.1)
 
         if not loaded:
-            console.print(
-                "[yellow]⚠️ Timeout waiting for new card. Stopping iteration.[/yellow]"
-            )
+            console.print("[yellow]Tiempo de espera agotado para nueva carta.[/yellow]")
             break
 
         try:
             frame = _get_detail_frame(page, timeout=10000)
             cur = _extract_from_frame(frame, base_url)
         except Exception as e:
-            console.print(f"[yellow]Error extracting data: {e}[/yellow]")
+            console.print(f"[yellow]Error extrayendo carta: {e}[/yellow]")
             continue
 
         records.append(cur)
@@ -312,20 +375,27 @@ def _iterate_cards(page, base_url, first_key, first_data):
             cur["rarity"],
             cur["belongs_gd"],
         )
-        console.print(f"[green]Scraping card #{len(records)}: {prev_key}[/green]")
+        console.print(f"[green]Carta #{len(records)}: {prev_key}[/green]")
 
         count_since_pause += 1
         if count_since_pause >= PAUSE_EVERY_CARDS:
-            console.print(f"[cyan]Pausing {PAUSE_TIME}s to avoid overload...[/cyan]")
+            console.print(
+                f"[cyan]Pausa de {PAUSE_TIME}s para evitar sobrecarga.[/cyan]"
+            )
             time.sleep(PAUSE_TIME)
             count_since_pause = 0
 
-    # Cierra fancybox al final
     _close_fancybox_if_open(page)
     return records
 
 
 def _load_existing_csv():
+    """
+    Carga el archivo CSV existente con los datos previamente extraídos.
+
+    Returns:
+        list[dict]: Registros cargados desde el archivo.
+    """
     if not os.path.exists(OUTPUT_CSV):
         return []
     with open(OUTPUT_CSV, newline="", encoding="utf-8") as f:
@@ -334,6 +404,12 @@ def _load_existing_csv():
 
 
 def _save_to_csv(records):
+    """
+    Guarda los registros de cartas en un archivo CSV.
+
+    Args:
+        records (list[dict]): Lista de cartas a guardar.
+    """
     with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
@@ -343,10 +419,21 @@ def _save_to_csv(records):
                 for field in FIELDNAMES
             }
             writer.writerow(row)
-    console.print(f"[green]✅ {len(records)} records saved to {OUTPUT_CSV}[/green]")
+    console.print(
+        f"[green]✅ {len(records)} registros guardados en {OUTPUT_CSV}[/green]"
+    )
 
 
 def run_scraper(output_csv):
+    """
+    Ejecuta el proceso completo de scraping de cartas desde la página de Gundam GCG.
+
+    Este proceso recorre cada expansión disponible, abre cada carta, extrae sus datos
+    y los guarda en un archivo CSV. Además, puede reanudar desde donde se dejó.
+
+    Args:
+        output_csv (str): Ruta del archivo CSV donde se guardarán los resultados.
+    """
     global OUTPUT_CSV
     OUTPUT_CSV = output_csv
     existing_records = _load_existing_csv()
@@ -363,7 +450,7 @@ def run_scraper(output_csv):
         _open_dropdown(page)
         packages = _get_packages(page)
         if not packages:
-            console.print("[red]No packages found, exiting.[/red]")
+            console.print("[red]No se encontraron paquetes, finalizando.[/red]")
             browser.close()
             return
 
@@ -374,14 +461,10 @@ def run_scraper(output_csv):
             pkg_text = pkg["text"]
             pkg_val = pkg["val"]
             if pkg_text.strip().upper() == "ALL" or pkg_text in existing_packages:
-                console.print(
-                    f"[yellow]Package '{pkg_text}' already exists or skipped.[/yellow]"
-                )
+                console.print(f"[yellow]Paquete '{pkg_text}' omitido.[/yellow]")
                 continue
 
-            console.print(
-                f"[magenta]Processing package: {pkg_text} (val={pkg_val})[/magenta]"
-            )
+            console.print(f"[magenta]Procesando paquete: {pkg_text}[/magenta]")
             succeeded = False
             attempts = 0
 
@@ -397,7 +480,7 @@ def run_scraper(output_csv):
                         )
                     except Exception:
                         console.print(
-                            f"[yellow]No cards found for package '{pkg_text}', skipping.[/yellow]"
+                            f"[yellow]No se encontraron cartas en '{pkg_text}'.[/yellow]"
                         )
                         succeeded = True
                         break
@@ -417,17 +500,17 @@ def run_scraper(output_csv):
                     _save_to_csv(all_records)
 
                     console.print(
-                        f"[green]Package '{pkg_text}' scraped successfully: {len(temp_records)} cards.[/green]"
+                        f"[green]Paquete '{pkg_text}' procesado correctamente ({len(temp_records)} cartas).[/green]"
                     )
                     succeeded = True
 
                     console.print(
-                        f"[cyan]Waiting {WAIT_BETWEEN_PACKAGES}s before next package...[/cyan]"
+                        f"[cyan]Esperando {WAIT_BETWEEN_PACKAGES}s antes del siguiente paquete...[/cyan]"
                     )
                     time.sleep(WAIT_BETWEEN_PACKAGES)
                 except Exception as e:
                     console.print(
-                        f"[red]Error scraping package '{pkg_text}' (attempt {attempts}): {e}[/red]"
+                        f"[red]Error en paquete '{pkg_text}' (intento {attempts}): {e}[/red]"
                     )
                     _close_fancybox_if_open(page)
                     all_records = [
@@ -435,13 +518,13 @@ def run_scraper(output_csv):
                     ]
                     _save_to_csv(all_records)
                     console.print(
-                        f"[yellow]Retrying package '{pkg_text}' after {WAIT_BETWEEN_PACKAGES}s...[/yellow]"
+                        f"[yellow]Reintentando '{pkg_text}' después de {WAIT_BETWEEN_PACKAGES}s...[/yellow]"
                     )
                     time.sleep(WAIT_BETWEEN_PACKAGES)
 
             if not succeeded:
                 console.print(
-                    f"[red]Failed package '{pkg_text}' after {MAX_RETRIES_PER_PACKAGE} attempts, skipping.[/red]"
+                    f"[red]No se pudo completar '{pkg_text}' tras varios intentos.[/red]"
                 )
 
         _save_to_csv(all_records)
