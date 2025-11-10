@@ -379,7 +379,6 @@ def process_csv_to_db(conn, csv_path, maria=False):
         rarity = (
             r["rarity"].strip() if "rarity" in r and r["rarity"] is not None else ""
         )
-        alt_art = "+" in rarity
         zone_id = get_or_create(conn, "zones", "zone", r["zone"].strip(), maria)
         link_id = get_or_create(conn, "links", "link", r["link"].strip(), maria)
         anime_id = get_or_create(conn, "animes", "anime", r["anime"].strip(), maria)
@@ -403,7 +402,8 @@ def process_csv_to_db(conn, csv_path, maria=False):
             base = os.path.basename(img_url)
             base = base.split(".webp")[0]
             img_name = base
-
+        
+        alt_art = bool(re.search(r"_.+", img_name))
         cols = "gd,name,rarity,level,cost,text_card,zone_id,link_id,ap,hp,anime_id,belongs_gd_id,img,alt_art,color_ids,type_ids,tag_ids,trait_ids"
         placeholders = ",".join([placeholder] * 18)
         if maria:
