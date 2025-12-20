@@ -470,31 +470,22 @@ def process_csv_to_db(conn, csv_path, maria=False):
     conn.commit()
 
 
-def build_database(csv_path, use_sqlite=True, db_name="GundamDB"):
+def build_database(csv_source, use_sqlite=True, db_name="GundamDB"):
     """
-    Construye una base de datos completa a partir del archivo CSV generado por el scraper.
+    Construye una base de datos completa a partir de archivos CSV.
 
     Este proceso:
-        1. Conecta a la base de datos (SQLite o MariaDB según el parámetro `use_sqlite`).
+        1. Conecta a la base de datos (SQLite o MariaDB segun el parametro `use_sqlite`).
         2. Crea todas las tablas necesarias mediante `create_schema()`.
-        3. Importa los datos del CSV a las tablas con `process_csv_to_db()`.
+        3. Si `csv_source` es un directorio, importa todos los .csv encontrados.
+           Si es un archivo, importa ese unico archivo.
         4. Cierra la conexión y confirma la finalización.
 
     Args:
-        csv_path (str): Ruta al archivo CSV que contiene los datos de las cartas.
+        csv_source (str): Ruta al archivo CSV o directorio con CSVs.
         use_sqlite (bool, opcional): Si es True, usa SQLite (modo local).
             Si es False, usa MariaDB con las credenciales definidas en `.env`.
         db_name (str, opcional): Nombre de la base de datos (sin extensión .sqlite).
-
-    Returns:
-        None
-
-    Ejemplo:
-        build_database("gundam_cards.csv", use_sqlite=True, db_name="GundamDB")
-        [cyan]Connecting to SQLite database...[/cyan]
-        [cyan]Creating database schema...[/cyan]
-        [cyan]Importing CSV data into database...[/cyan]
-        [green]Database 'GundamDB' ready.[/green]
     """
     console.print(
         f"[cyan]Connecting to {'SQLite' if use_sqlite else 'MariaDB'} database...[/cyan]"
@@ -511,7 +502,19 @@ def build_database(csv_path, use_sqlite=True, db_name="GundamDB"):
     create_schema(conn, maria=maria)
 
     console.print("[cyan]Importing CSV data into database...[/cyan]")
-    process_csv_to_db(conn, csv_path, maria=maria)
+    
+    if os.path.isdir(csv_source):
+        files = [f for f in os.listdir(csv_source) if f.lower().endswith(".csv")]
+        console.print(f"[cyan]Found {len(files)} CSV files in '{csv_source}'[/cyan]")
+        for f in files:
+            full_path = os.path.join(csv_source, f)
+            console.print(f"[cyan]Processing {f}...[/cyan]")
+            process_csv_to_db(conn, full_path, maria=maria)
+    else:
+        if os.path.exists(csv_source):
+            process_csv_to_db(conn, csv_source, maria=maria)
+        else:
+             console.print(f"[red]csv_source '{csv_source}' not found.[/red]")
 
     conn.close()
     console.print(f"[green]Database '{db_name}' ready.[/green]")

@@ -26,23 +26,31 @@ def main():
     Excepciones:
         Puede lanzar errores de red o escritura si alguno de los pasos falla.
     """
-    csv_name = "gundam_cards.csv"
+    csv_name = "csv"
     use_sqlite = False
     db_name = "GundamDB"
 
-    console.print("[cyan]Iniciando proceso de scraping...[/cyan]")
-    run_scraper(csv_name)
+    # Configuración de pasos a ejecutar (True = ejecutar, False = saltar)
+    RUN_SCRAPER = True
+    RUN_DB_BUILD = False
+    RUN_IMG_DOWNLOAD = False
 
-    console.print("[cyan]Construyendo base de datos...[/cyan]")
-    build_database(csv_name, use_sqlite, db_name)
+    if RUN_SCRAPER:
+        console.print("[cyan]Iniciando proceso de scraping...[/cyan]")
+        run_scraper(csv_name)
 
-    if os.path.exists(csv_name):
-        console.print("[cyan]Descargando y optimizando imágenes...[/cyan]")
-        asyncio.run(download_all_images(csv_name))
-    else:
-        console.print(
-            f"[red]El archivo CSV '{csv_name}' no existe, se omite la descarga de imágenes.[/red]"
-        )
+    if RUN_DB_BUILD:
+        console.print("[cyan]Construyendo base de datos...[/cyan]")
+        build_database(csv_name, use_sqlite, db_name)
+
+    if RUN_IMG_DOWNLOAD:
+        if os.path.exists(csv_name):
+            console.print("[cyan]Descargando y optimizando imágenes...[/cyan]")
+            asyncio.run(download_all_images(csv_name))
+        else:
+            console.print(
+                f"[red]La carpeta CSV '{csv_name}' no existe, se omite la descarga de imágenes.[/red]"
+            )
 
     console.print(
         "[bold green]Todas las tareas se completaron correctamente.[/bold green]"
@@ -52,8 +60,5 @@ def main():
 if __name__ == "__main__":
     """
     Punto de entrada del script.
-
-    Si este archivo se ejecuta directamente, se inicia el flujo completo de scraping,
-    construcción de base de datos y descarga de imágenes.
     """
     main()

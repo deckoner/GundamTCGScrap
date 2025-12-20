@@ -1,5 +1,5 @@
 .venv
 .env
-gundam_cards.csv
+csv
 __pycache__
 images

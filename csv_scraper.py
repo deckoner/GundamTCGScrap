@@ -9,12 +9,19 @@ from rich.console import Console
 console = Console()
 
 START_URL = "https://www.gundam-gcg.com/en/cards/"
-OUTPUT_CSV = "gundam_cards.csv"
-HEADLESS = False
+CSV_DIR = "csv"
+HEADLESS = True
 WAIT_BETWEEN_PACKAGES = 30
 MAX_RETRIES_PER_PACKAGE = 3
 PAUSE_EVERY_CARDS = 50
 PAUSE_TIME = 30
+SKIP_PACKAGES = [
+    "Dual Impact [GD02]",
+    "Heroic Beginnings [ST01]",
+    "Newtype Rising [GD01]",
+    "Wings of Advance [ST02]",
+    "Zeon's Rush [ST03]"
+]
 
 FIELDNAMES = [
     "GD",
@@ -168,9 +175,9 @@ def _reject_cookies(page):
         reject_btn.scroll_into_view_if_needed()
         reject_btn.click(force=True)
         page.wait_for_timeout(1000)
-        console.print("[green]✅ Cookies rechazadas correctamente.[/green]")
+        console.print("[green]Cookies rechazadas correctamente.[/green]")
     except Exception as e:
-        console.print(f"[yellow]⚠️ No se pudieron rechazar las cookies: {e}[/yellow]")
+        console.print(f"[yellow]No se pudieron rechazar las cookies: {e}[/yellow]")
 
 
 def _open_dropdown(page):
@@ -189,9 +196,9 @@ def _open_dropdown(page):
         page.wait_for_timeout(1000)
         if not page.locator(".filterListItems").count():
             page.wait_for_selector(".filterListItems", timeout=5000)
-        console.print("[green]✅ Menú de expansiones abierto correctamente.[/green]")
+        console.print("[green]Menu de expansiones abierto correctamente.[/green]")
     except Exception as e:
-        console.print(f"[yellow]⚠️ No se pudo abrir el menú desplegable: {e}[/yellow]")
+        console.print(f"[yellow]No se pudo abrir el menu desplegable: {e}[/yellow]")
 
 
 def _get_packages(page):
@@ -314,6 +321,11 @@ def _iterate_cards(page, base_url, first_key, first_data):
     """
     records = [first_data]
     prev_key = first_key
+    seen_keys = set()
+    # Agregar la primera carta a seen_keys
+    if first_data["GD"] and first_data["name"]:
+         seen_keys.add((first_data["GD"], first_data["name"], first_data["rarity"]))
+
     count_since_pause = 1
 
     while True:
@@ -325,7 +337,7 @@ def _iterate_cards(page, base_url, first_key, first_data):
                 or not next_btn.is_enabled()
                 or next_btn.get_attribute("disabled") is not None
             ):
-                console.print("[green]✅ No hay más cartas en el paquete.[/green]")
+                console.print("[green]No hay mas cartas en el paquete.[/green]")
                 break
 
             next_btn.scroll_into_view_if_needed()
@@ -368,6 +380,15 @@ def _iterate_cards(page, base_url, first_key, first_data):
             console.print(f"[yellow]Error extrayendo carta: {e}[/yellow]")
             continue
 
+        if cur["GD"] and cur["name"]:
+            # Usamos una clave local para detectar duplicados dentro de este mismo paquete
+            # (asumiendo que no debería haber cartas idénticas repetidas en el loop)
+            check_key = (cur["GD"], cur["name"], cur["rarity"])
+            if check_key in seen_keys:
+                console.print(f"[yellow]Ciclo detectado: la carta {check_key} ya fue procesada. Terminando paquete.[/yellow]")
+                break
+            seen_keys.add(check_key)
+
         records.append(cur)
         prev_key = (
             cur["GD"],
@@ -389,28 +410,35 @@ def _iterate_cards(page, base_url, first_key, first_data):
     return records
 
 
-def _load_existing_csv():
+def _load_existing_csv(csv_path):
     """
-    Carga el archivo CSV existente con los datos previamente extraídos.
+    Carga el archivo CSV existente de un paquete.
 
+    Args:
+        csv_path (str): Ruta del archivo CSV.
+        
     Returns:
         list[dict]: Registros cargados desde el archivo.
     """
-    if not os.path.exists(OUTPUT_CSV):
+    if not os.path.exists(csv_path):
         return []
-    with open(OUTPUT_CSV, newline="", encoding="utf-8") as f:
+    with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         return list(reader)
 
 
-def _save_to_csv(records):
+def _save_to_csv(records, csv_path):
     """
-    Guarda los registros de cartas en un archivo CSV.
+    Guarda los registros de cartas en un archivo CSV especifico.
 
     Args:
         records (list[dict]): Lista de cartas a guardar.
+        csv_path (str): Ruta donde guardar el CSV.
     """
-    with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
+    # Asegurar que el directorio existe
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
         for r in records:
@@ -420,26 +448,19 @@ def _save_to_csv(records):
             }
             writer.writerow(row)
     console.print(
-        f"[green]✅ {len(records)} registros guardados en {OUTPUT_CSV}[/green]"
+        f"[green]{len(records)} registros guardados en {csv_path}[/green]"
     )
 
 
-def run_scraper(output_csv):
+def run_scraper(csv_folder=CSV_DIR):
     """
-    Ejecuta el proceso completo de scraping de cartas desde la página de Gundam GCG.
-
-    Este proceso recorre cada expansión disponible, abre cada carta, extrae sus datos
-    y los guarda en un archivo CSV. Además, puede reanudar desde donde se dejó.
+    Ejecuta el proceso completo de scraping. Crea un CSV por cada paquete en la carpeta indicada.
 
     Args:
-        output_csv (str): Ruta del archivo CSV donde se guardarán los resultados.
+        csv_folder (str): Carpeta donde se guardaran los CSVs.
     """
-    global OUTPUT_CSV
-    OUTPUT_CSV = output_csv
-    existing_records = _load_existing_csv()
-    existing_packages = set(
-        r["belongs_gd"] for r in existing_records if r.get("belongs_gd")
-    )
+    if not os.path.exists(csv_folder):
+        os.makedirs(csv_folder)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS, args=["--start-maximized"])
@@ -454,17 +475,36 @@ def run_scraper(output_csv):
             browser.close()
             return
 
-        all_records = existing_records
         base_url = page.url.rsplit("/", 1)[0] + "/"
 
         for pkg in packages:
-            pkg_text = pkg["text"]
+            pkg_text = pkg["text"].strip()
             pkg_val = pkg["val"]
-            if pkg_text.strip().upper() == "ALL" or pkg_text in existing_packages:
-                console.print(f"[yellow]Paquete '{pkg_text}' omitido.[/yellow]")
+            
+            # Limpiar nombre de archivo (basico para Windows/Linux)
+            safe_name = re.sub(r'[\\/*?:"<>|]', "", pkg_text)
+            pkg_csv_path = os.path.join(csv_folder, f"{safe_name}.csv")
+
+            if pkg_text.upper() == "ALL":
                 continue
+                
+            # Logica de salto: si esta en la lista SKIP o si el archivo ya existe
+            if pkg_text in SKIP_PACKAGES:
+                console.print(f"[yellow]Paquete '{pkg_text}' saltado por configuracion (SKIP_LIST).[/yellow]")
+                continue
+            
+            if os.path.exists(pkg_csv_path):
+                 console.print(f"[yellow]Paquete '{pkg_text}' ya existe en '{pkg_csv_path}', saltando...[/yellow]")
+                 continue
 
             console.print(f"[magenta]Procesando paquete: {pkg_text}[/magenta]")
+            
+            all_records = [] 
+            # No cargamos existentes para mergear porque ahora es un CSV por paquete.
+            # Si existiera y no lo saltamos (logica de resume/append), podriamos cargar, 
+            # pero el usuario pidio que si ya fue scrapeado (existe csv) no lo haga.
+            # Asi que asumimos empezar de 0 para este paquete si el archivo no existe.
+
             succeeded = False
             attempts = 0
 
@@ -482,6 +522,7 @@ def run_scraper(output_csv):
                         console.print(
                             f"[yellow]No se encontraron cartas en '{pkg_text}'.[/yellow]"
                         )
+                        # Si está vacio, creamos un CSV vacio o simplemente marcamos success
                         succeeded = True
                         break
 
@@ -490,14 +531,10 @@ def run_scraper(output_csv):
                     temp_records = _iterate_cards(page, base_url, first_key, first_data)
 
                     for r in temp_records:
-                        if not r.get("belongs_gd"):
-                            r["belongs_gd"] = pkg_text
+                        r["belongs_gd"] = pkg_text
+                        all_records.append(r)
 
-                    all_records = [
-                        r for r in all_records if r.get("belongs_gd") != pkg_text
-                    ]
-                    all_records.extend(temp_records)
-                    _save_to_csv(all_records)
+                    _save_to_csv(all_records, pkg_csv_path)
 
                     console.print(
                         f"[green]Paquete '{pkg_text}' procesado correctamente ({len(temp_records)} cartas).[/green]"
@@ -513,12 +550,14 @@ def run_scraper(output_csv):
                         f"[red]Error en paquete '{pkg_text}' (intento {attempts}): {e}[/red]"
                     )
                     _close_fancybox_if_open(page)
-                    all_records = [
-                        r for r in all_records if r.get("belongs_gd") != pkg_text
-                    ]
-                    _save_to_csv(all_records)
+                    # En caso de fallo parcial, podriamos guardar lo que tenemos, pero
+                    # la nueva logica sugiere un "todo o nada" o reintentos.
+                    # Guardamos por si acaso.
+                    if all_records:
+                        _save_to_csv(all_records, pkg_csv_path)
+
                     console.print(
-                        f"[yellow]Reintentando '{pkg_text}' después de {WAIT_BETWEEN_PACKAGES}s...[/yellow]"
+                        f"[yellow]Reintentando '{pkg_text}' despues de {WAIT_BETWEEN_PACKAGES}s...[/yellow]"
                     )
                     time.sleep(WAIT_BETWEEN_PACKAGES)
 
@@ -527,5 +566,4 @@ def run_scraper(output_csv):
                     f"[red]No se pudo completar '{pkg_text}' tras varios intentos.[/red]"
                 )
 
-        _save_to_csv(all_records)
         browser.close()

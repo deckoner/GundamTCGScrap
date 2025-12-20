@@ -1,9 +1,10 @@
+import csv
 import os
 import re
 import asyncio
 import random
 import aiohttp
-import pandas as pd
+
 from io import BytesIO
 from PIL import Image
 from rich.console import Console
@@ -92,15 +93,50 @@ async def fetch_and_optimize_image(session, url: str, name: str, retry: int = 0)
             return False
 
 
-async def download_all_images(csv_path: str):
-    """
-    Descarga y optimiza todas las imágenes de cartas listadas en un archivo CSV.
 
-    Este proceso lee el CSV generado por el scraper, descarga las imágenes únicas en paralelo,
-    las convierte a formato WEBP y realiza pausas aleatorias para evitar bloqueos por exceso de peticiones.
+
+def collect_urls_from_source(source_path):
+    """
+    Recolecta URLs de imagenes desde un archivo CSV o un directorio de CSVs.
+    """
+    urls = []
+    
+    # Si es un directorio, leemos todos los .csv
+    if os.path.isdir(source_path):
+        files = [f for f in os.listdir(source_path) if f.lower().endswith(".csv")]
+        for f in files:
+             full_path = os.path.join(source_path, f)
+             try:
+                 with open(full_path, mode="r", encoding="utf-8", newline="") as csvfile:
+                     reader = csv.DictReader(csvfile)
+                     for row in reader:
+                         if "img" in row and row["img"].strip():
+                             urls.append(row["img"].strip())
+             except Exception as e:
+                 console.print(f"[red]Error leyendo {f}: {e}[/red]")
+                 
+    # Si es un archivo individual
+    elif os.path.exists(source_path):
+         try:
+             with open(source_path, mode="r", encoding="utf-8", newline="") as csvfile:
+                 reader = csv.DictReader(csvfile)
+                 for row in reader:
+                     if "img" in row and row["img"].strip():
+                         urls.append(row["img"].strip())
+         except Exception as e:
+             console.print(f"[red]Error leyendo {source_path}: {e}[/red]")
+    
+    return list(dict.fromkeys(urls))
+
+async def download_all_images(csv_source: str):
+    """
+    Descarga y optimiza todas las imágenes de cartas listadas en CSVs.
+
+    Este proceso lee el/los CSV(s), descarga las imágenes únicas en paralelo,
+    las convierte a formato WEBP y realiza pausas aleatorias.
 
     Args:
-        csv_path (str): Ruta del archivo CSV que contiene la columna 'img' con las URLs.
+        csv_source (str): Ruta del archivo CSV o directorio con CSVs.
 
     Efectos secundarios:
         - Crea la carpeta 'images' si no existe.
@@ -110,9 +146,7 @@ async def download_all_images(csv_path: str):
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
 
-    df = pd.read_csv(csv_path, dtype=str).fillna("")
-    urls = [u.strip() for u in df["img"].tolist() if u.strip()]
-    unique_urls = list(dict.fromkeys(urls))  # Eliminar duplicados
+    unique_urls = collect_urls_from_source(csv_source)
 
     console.print(f"[cyan]Descargando {len(unique_urls)} imágenes...[/cyan]")
 
