@@ -93,40 +93,39 @@ async def fetch_and_optimize_image(session, url: str, name: str, retry: int = 0)
             return False
 
 
-
-
 def collect_urls_from_source(source_path):
     """
     Recolecta URLs de imagenes desde un archivo CSV o un directorio de CSVs.
     """
     urls = []
-    
+
     # Si es un directorio, leemos todos los .csv
     if os.path.isdir(source_path):
         files = [f for f in os.listdir(source_path) if f.lower().endswith(".csv")]
         for f in files:
-             full_path = os.path.join(source_path, f)
-             try:
-                 with open(full_path, mode="r", encoding="utf-8", newline="") as csvfile:
-                     reader = csv.DictReader(csvfile)
-                     for row in reader:
-                         if "img" in row and row["img"].strip():
-                             urls.append(row["img"].strip())
-             except Exception as e:
-                 console.print(f"[red]Error leyendo {f}: {e}[/red]")
-                 
+            full_path = os.path.join(source_path, f)
+            try:
+                with open(full_path, mode="r", encoding="utf-8", newline="") as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        if "img" in row and row["img"].strip():
+                            urls.append(row["img"].strip())
+            except Exception as e:
+                console.print(f"[red]Error leyendo {f}: {e}[/red]")
+
     # Si es un archivo individual
     elif os.path.exists(source_path):
-         try:
-             with open(source_path, mode="r", encoding="utf-8", newline="") as csvfile:
-                 reader = csv.DictReader(csvfile)
-                 for row in reader:
-                     if "img" in row and row["img"].strip():
-                         urls.append(row["img"].strip())
-         except Exception as e:
-             console.print(f"[red]Error leyendo {source_path}: {e}[/red]")
-    
+        try:
+            with open(source_path, mode="r", encoding="utf-8", newline="") as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    if "img" in row and row["img"].strip():
+                        urls.append(row["img"].strip())
+        except Exception as e:
+            console.print(f"[red]Error leyendo {source_path}: {e}[/red]")
+
     return list(dict.fromkeys(urls))
+
 
 async def download_all_images(csv_source: str):
     """

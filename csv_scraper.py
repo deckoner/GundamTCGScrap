@@ -16,11 +16,18 @@ MAX_RETRIES_PER_PACKAGE = 3
 PAUSE_EVERY_CARDS = 50
 PAUSE_TIME = 30
 SKIP_PACKAGES = [
+    "Edition Beta",
+    "Newtype Rising [GD01]",
     "Dual Impact [GD02]",
     "Heroic Beginnings [ST01]",
-    "Newtype Rising [GD01]",
     "Wings of Advance [ST02]",
-    "Zeon's Rush [ST03]"
+    "Zeon's Rush [ST03]",
+    "SEED Strike [ST04]",
+    "Iron Bloom [ST05]",
+    "Clan Unity [ST06]",
+    "Basic Cards",
+    "Promotion card",
+    "Other Product Card"
 ]
 
 FIELDNAMES = [
@@ -324,7 +331,7 @@ def _iterate_cards(page, base_url, first_key, first_data):
     seen_keys = set()
     # Agregar la primera carta a seen_keys
     if first_data["GD"] and first_data["name"]:
-         seen_keys.add((first_data["GD"], first_data["name"], first_data["rarity"]))
+        seen_keys.add((first_data["GD"], first_data["name"], first_data["rarity"]))
 
     count_since_pause = 1
 
@@ -385,7 +392,9 @@ def _iterate_cards(page, base_url, first_key, first_data):
             # (asumiendo que no debería haber cartas idénticas repetidas en el loop)
             check_key = (cur["GD"], cur["name"], cur["rarity"])
             if check_key in seen_keys:
-                console.print(f"[yellow]Ciclo detectado: la carta {check_key} ya fue procesada. Terminando paquete.[/yellow]")
+                console.print(
+                    f"[yellow]Ciclo detectado: la carta {check_key} ya fue procesada. Terminando paquete.[/yellow]"
+                )
                 break
             seen_keys.add(check_key)
 
@@ -416,7 +425,7 @@ def _load_existing_csv(csv_path):
 
     Args:
         csv_path (str): Ruta del archivo CSV.
-        
+
     Returns:
         list[dict]: Registros cargados desde el archivo.
     """
@@ -437,7 +446,7 @@ def _save_to_csv(records, csv_path):
     """
     # Asegurar que el directorio existe
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-    
+
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
@@ -447,9 +456,7 @@ def _save_to_csv(records, csv_path):
                 for field in FIELDNAMES
             }
             writer.writerow(row)
-    console.print(
-        f"[green]{len(records)} registros guardados en {csv_path}[/green]"
-    )
+    console.print(f"[green]{len(records)} registros guardados en {csv_path}[/green]")
 
 
 def run_scraper(csv_folder=CSV_DIR):
@@ -480,28 +487,32 @@ def run_scraper(csv_folder=CSV_DIR):
         for pkg in packages:
             pkg_text = pkg["text"].strip()
             pkg_val = pkg["val"]
-            
+
             # Limpiar nombre de archivo (basico para Windows/Linux)
             safe_name = re.sub(r'[\\/*?:"<>|]', "", pkg_text)
             pkg_csv_path = os.path.join(csv_folder, f"{safe_name}.csv")
 
             if pkg_text.upper() == "ALL":
                 continue
-                
+
             # Logica de salto: si esta en la lista SKIP o si el archivo ya existe
             if pkg_text in SKIP_PACKAGES:
-                console.print(f"[yellow]Paquete '{pkg_text}' saltado por configuracion (SKIP_LIST).[/yellow]")
+                console.print(
+                    f"[yellow]Paquete '{pkg_text}' saltado por configuracion (SKIP_LIST).[/yellow]"
+                )
                 continue
-            
+
             if os.path.exists(pkg_csv_path):
-                 console.print(f"[yellow]Paquete '{pkg_text}' ya existe en '{pkg_csv_path}', saltando...[/yellow]")
-                 continue
+                console.print(
+                    f"[yellow]Paquete '{pkg_text}' ya existe en '{pkg_csv_path}', saltando...[/yellow]"
+                )
+                continue
 
             console.print(f"[magenta]Procesando paquete: {pkg_text}[/magenta]")
-            
-            all_records = [] 
+
+            all_records = []
             # No cargamos existentes para mergear porque ahora es un CSV por paquete.
-            # Si existiera y no lo saltamos (logica de resume/append), podriamos cargar, 
+            # Si existiera y no lo saltamos (logica de resume/append), podriamos cargar,
             # pero el usuario pidio que si ya fue scrapeado (existe csv) no lo haga.
             # Asi que asumimos empezar de 0 para este paquete si el archivo no existe.
 

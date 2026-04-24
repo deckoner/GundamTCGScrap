@@ -402,7 +402,7 @@ def process_csv_to_db(conn, csv_path, maria=False):
             base = os.path.basename(img_url)
             base = base.split(".webp")[0]
             img_name = base
-        
+
         alt_art = bool(re.search(r"_.+", img_name))
         cols = "gd,name,rarity,level,cost,text_card,zone_id,link_id,ap,hp,anime_id,belongs_gd_id,img,alt_art,color_ids,type_ids,tag_ids,trait_ids"
         placeholders = ",".join([placeholder] * 18)
@@ -502,7 +502,7 @@ def build_database(csv_source, use_sqlite=True, db_name="GundamDB"):
     create_schema(conn, maria=maria)
 
     console.print("[cyan]Importing CSV data into database...[/cyan]")
-    
+
     if os.path.isdir(csv_source):
         files = [f for f in os.listdir(csv_source) if f.lower().endswith(".csv")]
         console.print(f"[cyan]Found {len(files)} CSV files in '{csv_source}'[/cyan]")
@@ -514,7 +514,7 @@ def build_database(csv_source, use_sqlite=True, db_name="GundamDB"):
         if os.path.exists(csv_source):
             process_csv_to_db(conn, csv_source, maria=maria)
         else:
-             console.print(f"[red]csv_source '{csv_source}' not found.[/red]")
+            console.print(f"[red]csv_source '{csv_source}' not found.[/red]")
 
     conn.close()
     console.print(f"[green]Database '{db_name}' ready.[/green]")
