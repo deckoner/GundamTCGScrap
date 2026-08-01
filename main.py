@@ -33,7 +33,7 @@ def main():
     # Configuración de pasos a ejecutar (True = ejecutar, False = saltar)
     RUN_SCRAPER = True
     RUN_DB_BUILD = True
-    RUN_IMG_DOWNLOAD = True
+    RUN_IMG_DOWNLOAD = False
 
     if RUN_SCRAPER:
         console.print("[cyan]Iniciando proceso de scraping...[/cyan]")

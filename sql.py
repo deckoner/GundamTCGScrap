@@ -8,6 +8,12 @@ from rich.progress import track
 
 console = Console()
 
+# Tipos de cartas básicas de recurso. Para estos tipos, la única versión
+# "original" (alt_art=False) es la que se sube en el paquete Basic Cards;
+# cualquier otra carta de estos tipos es arte alternativo.
+BASIC_CARD_TYPES = {"RESOURCE", "EX BASE", "EX RESOURCE"}
+BASIC_CARDS_SET = "basic cards"
+
 try:
     import mariadb
 except ImportError:
@@ -464,6 +470,17 @@ def process_csv_to_db(conn, csv_path, maria=False):
 
         alt_art = bool(re.search(r"_.+", img_name))
 
+        # Regla especial para los tipos de cartas básicas de recurso:
+        #   RESOURCE, EX BASE, EX RESOURCE
+        # Solo la versión del paquete 'Basic Cards' es la original; el resto
+        # de cartas con esos tipos son siempre arte alternativo.
+        card_type = r.get("type", "").strip().upper()
+        belongs_basic_cards = (
+            r.get("belongs_gd", "").strip().lower() == BASIC_CARDS_SET
+        )
+        if card_type in BASIC_CARD_TYPES:
+            alt_art = not belongs_basic_cards
+
         gd_value = r.get("GD", "").strip()
         name_value = r.get("name", "").strip()
         existing_id = find_existing_card(conn, maria, gd_value, name_value, img_name)
@@ -574,6 +591,10 @@ def build_database(csv_source, use_sqlite=True, db_name="GundamDB"):
 
     if os.path.isdir(csv_source):
         files = [f for f in os.listdir(csv_source) if f.lower().endswith(".csv")]
+        # El CSV de 'Basic Cards' (cartas básicas de recurso) se procesa primero.
+        files = sorted(
+            files, key=lambda f: (0, f) if "basic cards" in f.lower() else (1, f)
+        )
         console.print(f"[cyan]Found {len(files)} CSV files in '{csv_source}'[/cyan]")
         for f in files:
             full_path = os.path.join(csv_source, f)

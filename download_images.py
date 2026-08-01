@@ -19,6 +19,24 @@ RETRY_LIMIT = 3
 WEBP_KEY_EXT = ".webp"
 CACHE_CONTROL = "public, max-age=31536000, immutable"
 
+# Paquete que debe procesarse siempre primero: contiene las cartas básicas
+# de recurso (R-001, EXB-001, EXR-001), necesarias para el resto de sets.
+PRIORITY_CSV_KEYWORD = "basic cards"
+
+
+def csv_sort_key(filename):
+    """
+    Clave de ordenación para que el CSV de 'Basic Cards' se procese primero.
+
+    Args:
+        filename (str): Nombre del archivo CSV.
+
+    Returns:
+        tuple: (0, nombre) para Basic Cards y (1, nombre) para el resto.
+    """
+    is_priority = PRIORITY_CSV_KEYWORD in filename.lower()
+    return (0, filename) if is_priority else (1, filename)
+
 
 def clean_image_name(url: str) -> str:
     """
@@ -120,6 +138,7 @@ def collect_urls_from_source(source_path):
 
     if os.path.isdir(source_path):
         files = [f for f in os.listdir(source_path) if f.lower().endswith(".csv")]
+        files = sorted(files, key=csv_sort_key)
         for f in files:
             full_path = os.path.join(source_path, f)
             try:
