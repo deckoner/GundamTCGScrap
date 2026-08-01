@@ -9,6 +9,11 @@ from rich.progress import track
 console = Console()
 
 try:
+    import mariadb
+except ImportError:
+    mariadb = None
+
+try:
     import pymysql
 except ImportError:
     pymysql = None
@@ -134,36 +139,62 @@ def connect_sqlite(db):
     return sqlite3.connect(db)
 
 
-def connect_mariadb(db):
+def connect_mariadb(db=None):
     """
     Conecta con una base de datos MariaDB utilizando las credenciales del archivo .env.
 
     Variables de entorno requeridas:
         - DB_HOST
+        - DB_PORT (opcional, por defecto 3306)
         - DB_USER
         - DB_PASSWORD
+        - DB_NAME
 
     Args:
-        db (str): Nombre de la base de datos.
+        db (str, opcional): Nombre de la base de datos. Si no se pasa,
+            se usa la variable DB_NAME del archivo .env.
 
     Returns:
-        pymysql.Connection: Conexión a la base de datos MariaDB.
+        Connection: Conexión a la base de datos MariaDB (mariadb o pymysql).
     """
     load_dotenv()
     host = os.getenv("DB_HOST", "localhost")
+    port = int(os.getenv("DB_PORT", "3306") or "3306")
     user = os.getenv("DB_USER", "root")
     password = os.getenv("DB_PASSWORD", "")
-    if not db:
+    name = db or os.getenv("DB_NAME", "")
+    if not name:
         console.print("[red]ERROR: Falta DB_NAME en el archivo .env[/red]")
         raise RuntimeError("DB_NAME no definido en .env")
-    connection = pymysql.connect(
-        host=host,
-        user=user,
-        password=password,
-        database=db,
-        autocommit=True,
-        charset="utf8mb4",
-    )
+    if mariadb is None and pymysql is None:
+        console.print(
+            "[red]ERROR: No hay conector MariaDB instalado. Instala 'mariadb' o 'pymysql'.[/red]"
+        )
+        raise RuntimeError("No hay conector MariaDB disponible")
+    driver = mariadb if mariadb is not None else pymysql
+    if driver is pymysql:
+        kwargs = dict(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database=name,
+            autocommit=True,
+            charset="utf8mb4",
+            connect_timeout=15,
+        )
+    else:
+        kwargs = dict(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database=name,
+            autocommit=True,
+            init_command="SET NAMES utf8mb4",
+            connect_timeout=15,
+        )
+    connection = driver.connect(**kwargs)
     return connection
 
 
@@ -357,6 +388,38 @@ def get_or_create(conn, table, col, value, maria=False):
         return cur.lastrowid
 
 
+def find_existing_card(conn, maria, gd, name, img):
+    """
+    Busca una carta ya existente en la base de datos usando una clave natural.
+
+    La clave usa la combinación (gd, name, img) porque una misma carta puede
+    tener variantes de arte alternativo con el mismo 'gd' pero distinto 'img'
+    (p. ej. GD01-001, GD01-001_p1, GD01-001_p2).
+
+    Args:
+        conn: Conexión a la base de datos.
+        maria (bool): True si se usa MariaDB.
+        gd (str): Identificador del grupo de carta.
+        name (str): Nombre de la carta.
+        img (str): Nombre base del archivo de imagen.
+
+    Returns:
+        int | None: ID de la carta existente, o None si no existe.
+    """
+    if not gd and not img:
+        return None
+    cur = conn.cursor()
+    ph = "%s" if maria else "?"
+    cur.execute(
+        f"SELECT id FROM cards WHERE gd={ph} AND name={ph} AND img={ph} LIMIT 1",
+        (gd, name, img),
+    )
+    row = cur.fetchone()
+    if row:
+        return row[0]
+    return None
+
+
 def process_csv_to_db(conn, csv_path, maria=False):
     """
     Importa los datos del archivo CSV al esquema de la base de datos.
@@ -404,6 +467,16 @@ def process_csv_to_db(conn, csv_path, maria=False):
             img_name = base
 
         alt_art = bool(re.search(r"_.+", img_name))
+
+        gd_value = r.get("GD", "").strip()
+        name_value = r.get("name", "").strip()
+        existing_id = find_existing_card(conn, maria, gd_value, name_value, img_name)
+        if existing_id:
+            console.print(
+                f"[yellow]Carta '{gd_value}' ({name_value}) ya existe (id={existing_id}), se omite.[/yellow]"
+            )
+            continue
+
         cols = "gd,name,rarity,level,cost,text_card,zone_id,link_id,ap,hp,anime_id,belongs_gd_id,img,alt_art,color_ids,type_ids,tag_ids,trait_ids"
         placeholders = ",".join([placeholder] * 18)
         if maria:
@@ -412,8 +485,8 @@ def process_csv_to_db(conn, csv_path, maria=False):
             sql = f"INSERT OR IGNORE INTO cards ({cols}) VALUES ({placeholders})"
 
         params = (
-            r.get("GD", "").strip(),
-            r.get("name", "").strip(),
+            gd_value,
+            name_value,
             rarity,
             safe_int(r.get("level", "")),
             safe_int(r.get("cost", "")),

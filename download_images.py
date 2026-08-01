@@ -1,33 +1,35 @@
 import csv
 import os
-import re
 import asyncio
 import random
+import boto3
 import aiohttp
 
 from io import BytesIO
 from PIL import Image
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TimeRemainingColumn
 
 
 console = Console()
 
-OUTPUT_DIR = "images"
 CONCURRENT_DOWNLOADS = 8
 IMAGE_QUALITY = 85
 RETRY_LIMIT = 3
+WEBP_KEY_EXT = ".webp"
+CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 
 def clean_image_name(url: str) -> str:
     """
-    Limpia y genera un nombre de archivo válido a partir de una URL de imagen.
+    Limpia y genera el nombre base de un archivo a partir de una URL de imagen.
 
     Args:
         url (str): URL completa de la imagen.
 
     Returns:
-        str: Nombre base del archivo sin extensión ni parámetros.
+        str: Nombre base sin extensión ni parámetros.
     """
     if not url or not isinstance(url, str):
         return ""
@@ -36,70 +38,85 @@ def clean_image_name(url: str) -> str:
     return base.strip()
 
 
-def get_image_extension(url: str) -> str:
+def load_r2_client():
     """
-    Obtiene la extensión del archivo a partir de la URL.
+    Carga la configuración de Cloudflare R2 desde el archivo .env y crea el cliente S3.
 
-    Args:
-        url (str): URL de la imagen.
+    Variables de entorno requeridas:
+        - R2_ENDPOINT_URL
+        - R2_ACCESS_KEY_ID
+        - R2_SECRET_ACCESS_KEY
+        - R2_BUCKET
+        - R2_REGION (opcional, por defecto 'auto')
 
     Returns:
-        str: Extensión del archivo (por ejemplo, '.jpg', '.png', '.webp').
+        tuple: (cliente boto3, nombre del bucket).
     """
-    ext_match = re.search(r"\.(\w+)(?:\?|$)", url)
-    return f".{ext_match.group(1)}" if ext_match else ".webp"
+    load_dotenv()
+    endpoint = os.getenv("R2_ENDPOINT_URL")
+    access_key = os.getenv("R2_ACCESS_KEY_ID")
+    secret_key = os.getenv("R2_SECRET_ACCESS_KEY")
+    bucket = os.getenv("R2_BUCKET")
+    missing = [
+        label
+        for value, label in (
+            (endpoint, "R2_ENDPOINT_URL"),
+            (access_key, "R2_ACCESS_KEY_ID"),
+            (secret_key, "R2_SECRET_ACCESS_KEY"),
+            (bucket, "R2_BUCKET"),
+        )
+        if not value
+    ]
+    if missing:
+        console.print(f"[red]ERROR: Faltan variables en .env: {', '.join(missing)}[/red]")
+        raise RuntimeError("Configuración R2 incompleta en .env")
+
+    client = boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=os.getenv("R2_REGION", "auto"),
+    )
+    return client, bucket
 
 
-async def fetch_and_optimize_image(session, url: str, name: str, retry: int = 0):
+def list_existing_keys(client, bucket) -> set:
     """
-    Descarga una imagen desde la URL, la convierte a formato WEBP optimizado y la guarda en disco.
+    Lista todos los objetos ya subidos al bucket de R2 (paginado).
 
-    Si ocurre un fallo en la descarga, se reintenta automáticamente varias veces con pausas crecientes.
+    Usa ListObjectsV2, que devuelve hasta 1000 claves por petición, para
+    minimizar operaciones y ajustarse al nivel gratuito de R2.
 
     Args:
-        session (aiohttp.ClientSession): Sesión HTTP activa para realizar la solicitud.
-        url (str): URL de la imagen.
-        name (str): Nombre base para el archivo resultante.
-        retry (int): Número de reintentos realizados hasta el momento.
+        client: Cliente S3 de boto3.
+        bucket (str): Nombre del bucket.
 
     Returns:
-        bool | None:
-            - True si la descarga fue exitosa.
-            - False si falló tras varios intentos.
-            - None si la imagen ya existía y no se descargó nuevamente.
+        set[str]: Conjunto de claves (nombres de archivo) existentes.
     """
-    ext = get_image_extension(url)
-    output_path = os.path.join(OUTPUT_DIR, name + ext)
-
-    if os.path.exists(output_path):
-        return None
-
-    try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=25)) as resp:
-            if resp.status != 200:
-                raise Exception(f"HTTP {resp.status}")
-
-            content = await resp.read()
-            image = Image.open(BytesIO(content)).convert("RGB")
-            image.save(output_path, format="WEBP", optimize=True, quality=IMAGE_QUALITY)
-            return True
-
-    except Exception as e:
-        if retry < RETRY_LIMIT:
-            await asyncio.sleep(3 + retry)
-            return await fetch_and_optimize_image(session, url, name, retry + 1)
+    keys = set()
+    continuation_token = None
+    while True:
+        kwargs = {"Bucket": bucket}
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+        response = client.list_objects_v2(**kwargs)
+        for obj in response.get("Contents", []):
+            keys.add(obj["Key"])
+        if response.get("IsTruncated") and response.get("NextContinuationToken"):
+            continuation_token = response["NextContinuationToken"]
         else:
-            console.print(f"[red]Fallo persistente al descargar {url} → {e}[/red]")
-            return False
+            break
+    return keys
 
 
 def collect_urls_from_source(source_path):
     """
-    Recolecta URLs de imagenes desde un archivo CSV o un directorio de CSVs.
+    Recolecta URLs de imágenes desde un archivo CSV o un directorio de CSVs.
     """
     urls = []
 
-    # Si es un directorio, leemos todos los .csv
     if os.path.isdir(source_path):
         files = [f for f in os.listdir(source_path) if f.lower().endswith(".csv")]
         for f in files:
@@ -113,7 +130,6 @@ def collect_urls_from_source(source_path):
             except Exception as e:
                 console.print(f"[red]Error leyendo {f}: {e}[/red]")
 
-    # Si es un archivo individual
     elif os.path.exists(source_path):
         try:
             with open(source_path, mode="r", encoding="utf-8", newline="") as csvfile:
@@ -127,30 +143,105 @@ def collect_urls_from_source(source_path):
     return list(dict.fromkeys(urls))
 
 
-async def download_all_images(csv_source: str):
+async def fetch_optimize_upload(session, url: str, key: str, client, bucket: str, retry: int = 0):
     """
-    Descarga y optimiza todas las imágenes de cartas listadas en CSVs.
+    Descarga una imagen, la convierte a WEBP optimizado y la sube a R2.
 
-    Este proceso lee el/los CSV(s), descarga las imágenes únicas en paralelo,
-    las convierte a formato WEBP y realiza pausas aleatorias.
+    Si ocurre un fallo, se reintenta varias veces con pausas crecientes.
+
+    Args:
+        session (aiohttp.ClientSession): Sesión HTTP activa.
+        url (str): URL de la imagen a descargar.
+        key (str): Clave (nombre de archivo) en el bucket de R2.
+        client: Cliente S3 de boto3.
+        bucket (str): Nombre del bucket de R2.
+        retry (int): Número de reintentos realizados.
+
+    Returns:
+        bool: True si la subida fue exitosa, False en caso contrario.
+    """
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=25)) as resp:
+            if resp.status != 200:
+                raise Exception(f"HTTP {resp.status}")
+            content = await resp.read()
+
+        image = Image.open(BytesIO(content)).convert("RGB")
+        buffer = BytesIO()
+        image.save(buffer, format="WEBP", optimize=True, quality=IMAGE_QUALITY)
+
+        await asyncio.to_thread(
+            client.put_object,
+            Bucket=bucket,
+            Key=key,
+            Body=buffer.getvalue(),
+            ContentType="image/webp",
+            CacheControl=CACHE_CONTROL,
+        )
+        return True
+
+    except Exception as e:
+        if retry < RETRY_LIMIT:
+            await asyncio.sleep(3 + retry * 2)
+            return await fetch_optimize_upload(session, url, key, client, bucket, retry + 1)
+        console.print(f"[red]Fallo persistente en {url} → {e}[/red]")
+        return False
+
+
+async def upload_all_images_to_r2(csv_source: str):
+    """
+    Descarga, optimiza y sube a Cloudflare R2 todas las imágenes de cartas de los CSVs.
+
+    Proceso:
+        1. Lista las imágenes que ya existen en R2 para no volver a subirlas.
+        2. Recopila las URLs únicas de los CSVs.
+        3. Descarga cada imagen, la convierte a WEBP optimizado y la sube a R2.
+        4. Reintenta las imágenes que fallaron.
 
     Args:
         csv_source (str): Ruta del archivo CSV o directorio con CSVs.
 
     Efectos secundarios:
-        - Crea la carpeta 'images' si no existe.
-        - Guarda las imágenes procesadas en el directorio configurado.
-        - Muestra una barra de progreso con el estado de descarga.
+        - Sube las imágenes optimizadas al bucket configurado en .env.
+        - Muestra una barra de progreso con el estado del proceso.
     """
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+    client, bucket = load_r2_client()
+
+    console.print("[cyan]Listando imágenes ya existentes en R2...[/cyan]")
+    existing_keys = list_existing_keys(client, bucket)
+    console.print(
+        f"[cyan]{len(existing_keys)} imágenes encontradas en el bucket '{bucket}'.[/cyan]"
+    )
 
     unique_urls = collect_urls_from_source(csv_source)
+    console.print(f"[cyan]{len(unique_urls)} imágenes únicas en los CSVs.[/cyan]")
 
-    console.print(f"[cyan]Descargando {len(unique_urls)} imágenes...[/cyan]")
+    to_process = []
+    for url in unique_urls:
+        name = clean_image_name(url)
+        if not name:
+            continue
+        key = name + WEBP_KEY_EXT
+        if key not in existing_keys:
+            to_process.append((url, key))
 
+    already_existing = len(unique_urls) - len(to_process)
+    console.print(f"[cyan]{already_existing} ya están en R2 (se omiten).[/cyan]")
+
+    uploaded = 0
+    failed_urls = []
+    sem = asyncio.Semaphore(CONCURRENT_DOWNLOADS)
     connector = aiohttp.TCPConnector(limit=CONCURRENT_DOWNLOADS, ssl=False)
     timeout = aiohttp.ClientTimeout(total=40)
+
+    async def worker(url, key):
+        nonlocal uploaded
+        async with sem:
+            ok = await fetch_optimize_upload(session, url, key, client, bucket)
+            if ok:
+                uploaded += 1
+            else:
+                failed_urls.append(url)
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         with Progress(
@@ -160,43 +251,40 @@ async def download_all_images(csv_source: str):
             TimeRemainingColumn(),
             console=console,
         ) as progress:
-            task_id = progress.add_task("Descargando imágenes", total=len(unique_urls))
-            failed_urls = []
-            new_downloads = 0
+            task_id = progress.add_task("Subiendo imágenes a R2", total=len(to_process))
+            tasks = [asyncio.create_task(worker(u, k)) for u, k in to_process]
+            for i, done in enumerate(asyncio.as_completed(tasks), start=1):
+                await done
+                progress.advance(task_id)
+                if uploaded and i % random.randint(5, 10) == 0:
+                    pause = random.randint(3, 8)
+                    console.print(f"[yellow]Pausa aleatoria de {pause}s...[/yellow]")
+                    await asyncio.sleep(pause)
 
-            for url in unique_urls:
+    if failed_urls:
+        console.print(
+            f"[magenta]Reintentando {len(failed_urls)} imágenes fallidas...[/magenta]"
+        )
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            for url in failed_urls:
                 name = clean_image_name(url)
                 if not name:
                     continue
-
-                result = await fetch_and_optimize_image(session, url, name)
-                progress.advance(task_id)
-
-                if result is True:
-                    new_downloads += 1
-                elif result is False:
-                    failed_urls.append(url)
-
-                # Pausas aleatorias
-                if new_downloads > 0 and new_downloads % random.randint(5, 10) == 0:
-                    sleep_time = random.randint(5, 18)
-                    console.print(
-                        f"[yellow]Pausa aleatoria de {sleep_time}s...[/yellow]"
-                    )
-                    await asyncio.sleep(sleep_time)
-
-            # Segundo intento con las imágenes fallidas
-            if failed_urls:
-                console.print(
-                    f"[magenta]Reintentando {len(failed_urls)} imágenes fallidas...[/magenta]"
-                )
-                for url in failed_urls:
-                    name = clean_image_name(url)
-                    await fetch_and_optimize_image(session, url, name)
+                key = name + WEBP_KEY_EXT
+                if await fetch_optimize_upload(session, url, key, client, bucket):
+                    uploaded += 1
 
     console.print(
-        f"[green]Descarga completada. Imágenes guardadas en '{OUTPUT_DIR}/'[/green]"
+        f"[green]Subidas: {uploaded} | Ya existentes (omitidas): {already_existing} "
+        f"| Pendientes: {len(unique_urls) - already_existing - uploaded}[/green]"
     )
+
+
+async def download_all_images(csv_source: str):
+    """
+    Alias de compatibilidad que delega en upload_all_images_to_r2.
+    """
+    await upload_all_images_to_r2(csv_source)
 
 
 if __name__ == "__main__":
@@ -205,9 +293,6 @@ if __name__ == "__main__":
 
     Uso:
         python download_images.py archivo.csv
-
-    Si se ejecuta directamente, este bloque toma como argumento la ruta del archivo CSV
-    con las URLs de imágenes y lanza la descarga asincrónica de todas ellas.
     """
     import sys
 
@@ -216,4 +301,4 @@ if __name__ == "__main__":
         sys.exit(1)
 
     csv_path = sys.argv[1]
-    asyncio.run(download_all_images(csv_path))
+    asyncio.run(upload_all_images_to_r2(csv_path))

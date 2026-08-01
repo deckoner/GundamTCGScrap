@@ -17,17 +17,6 @@ PAUSE_EVERY_CARDS = 50
 PAUSE_TIME = 30
 SKIP_PACKAGES = [
     "Edition Beta",
-    "Newtype Rising [GD01]",
-    "Dual Impact [GD02]",
-    "Heroic Beginnings [ST01]",
-    "Wings of Advance [ST02]",
-    "Zeon's Rush [ST03]",
-    "SEED Strike [ST04]",
-    "Iron Bloom [ST05]",
-    "Clan Unity [ST06]",
-    "Basic Cards",
-    "Promotion card",
-    "Other Product Card"
 ]
 
 FIELDNAMES = [
