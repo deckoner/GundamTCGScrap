@@ -475,9 +475,7 @@ def process_csv_to_db(conn, csv_path, maria=False):
         # Solo la versión del paquete 'Basic Cards' es la original; el resto
         # de cartas con esos tipos son siempre arte alternativo.
         card_type = r.get("type", "").strip().upper()
-        belongs_basic_cards = (
-            r.get("belongs_gd", "").strip().lower() == BASIC_CARDS_SET
-        )
+        belongs_basic_cards = r.get("belongs_gd", "").strip().lower() == BASIC_CARDS_SET
         if card_type in BASIC_CARD_TYPES:
             alt_art = not belongs_basic_cards
 
