@@ -207,15 +207,13 @@ def _get_packages(page):
     Returns:
         list[dict]: Lista de paquetes con su texto, valor y estado.
     """
-    pkgs = page.evaluate(
-        """() => {
+    pkgs = page.evaluate("""() => {
             return Array.from(document.querySelectorAll('a.js-selectBtn-package')).map(a => ({
                 text: a.textContent.trim(),
                 val: a.getAttribute('data-val') || '',
                 isCurrent: a.classList.contains('is-current')
             }));
-        }"""
-    )
+        }""")
     return pkgs
 
 

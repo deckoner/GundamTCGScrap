@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TimeRemainingColumn
 
-
 console = Console()
 
 CONCURRENT_DOWNLOADS = 8
@@ -68,7 +67,9 @@ def load_r2_client():
         if not value
     ]
     if missing:
-        console.print(f"[red]ERROR: Faltan variables en .env: {', '.join(missing)}[/red]")
+        console.print(
+            f"[red]ERROR: Faltan variables en .env: {', '.join(missing)}[/red]"
+        )
         raise RuntimeError("Configuración R2 incompleta en .env")
 
     client = boto3.client(
@@ -143,7 +144,9 @@ def collect_urls_from_source(source_path):
     return list(dict.fromkeys(urls))
 
 
-async def fetch_optimize_upload(session, url: str, key: str, client, bucket: str, retry: int = 0):
+async def fetch_optimize_upload(
+    session, url: str, key: str, client, bucket: str, retry: int = 0
+):
     """
     Descarga una imagen, la convierte a WEBP optimizado y la sube a R2.
 
@@ -183,7 +186,9 @@ async def fetch_optimize_upload(session, url: str, key: str, client, bucket: str
     except Exception as e:
         if retry < RETRY_LIMIT:
             await asyncio.sleep(3 + retry * 2)
-            return await fetch_optimize_upload(session, url, key, client, bucket, retry + 1)
+            return await fetch_optimize_upload(
+                session, url, key, client, bucket, retry + 1
+            )
         console.print(f"[red]Fallo persistente en {url} → {e}[/red]")
         return False
 
@@ -265,7 +270,9 @@ async def upload_all_images_to_r2(csv_source: str):
         console.print(
             f"[magenta]Reintentando {len(failed_urls)} imágenes fallidas...[/magenta]"
         )
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with aiohttp.ClientSession(
+            connector=connector, timeout=timeout
+        ) as session:
             for url in failed_urls:
                 name = clean_image_name(url)
                 if not name:

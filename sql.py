@@ -213,8 +213,7 @@ def create_schema(conn, maria=False):
     """
     cur = conn.cursor()
     if not maria:
-        cur.executescript(
-            """
+        cur.executescript("""
         PRAGMA foreign_keys = ON;
         CREATE TABLE IF NOT EXISTS cards (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -283,11 +282,9 @@ def create_schema(conn, maria=False):
             FOREIGN KEY(deck_id) REFERENCES decks(id) ON DELETE CASCADE,
             FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE
         );
-        """
-        )
+        """)
     else:
-        cur.execute(
-            """
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS cards (
             id INT AUTO_INCREMENT PRIMARY KEY,
             gd VARCHAR(50),
@@ -309,8 +306,7 @@ def create_schema(conn, maria=False):
             tag_ids TEXT,
             trait_ids TEXT
         ) ENGINE=InnoDB;
-        """
-        )
+        """)
         cur.execute(
             "CREATE TABLE IF NOT EXISTS traits(id INT AUTO_INCREMENT PRIMARY KEY, trait VARCHAR(255) UNIQUE) ENGINE=InnoDB;"
         )

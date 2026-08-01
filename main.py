@@ -45,7 +45,9 @@ def main():
 
     if RUN_IMG_DOWNLOAD:
         if os.path.exists(csv_name):
-            console.print("[cyan]Descargando, optimizando y subiendo imágenes a R2...[/cyan]")
+            console.print(
+                "[cyan]Descargando, optimizando y subiendo imágenes a R2...[/cyan]"
+            )
             asyncio.run(upload_all_images_to_r2(csv_name))
         else:
             console.print(
